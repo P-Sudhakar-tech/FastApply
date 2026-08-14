@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "turboply"
+version = "0.1.0"
+description = "A drop-in, accelerated replacement for pandas .apply()"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas>=1.5",
+    "numpy>=1.23",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "turboply._turboply"
