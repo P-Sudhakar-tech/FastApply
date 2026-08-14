@@ -23,11 +23,13 @@ docs (this file, build scripts, CI) can and should stay technically accurate.
 On this machine the precompiled `maturin.exe` from PyPI cannot launch —
 it's linked against the MSVC Visual C++ Redistributable, which isn't
 installed here (only the GNU Rust toolchain is). Workaround: `./build.ps1`
-runs `cargo build --release` directly and copies the resulting DLL into
-`python/turboply/_turboply.pyd`, which is what `maturin develop` would have
-done. CI runs on Ubuntu with a proper toolchain, so `maturin develop` works
-there unaffected. Prefer `maturin develop --release` first; fall back to
-`build.ps1` only if it fails to launch.
+runs `cargo build --release` directly, copies the resulting DLL into
+`python/turboply/_turboply.pyd`, and writes a `turboply.pth` file into the
+venv's site-packages pointing at `python/` — the same end result as
+`maturin develop`, so `import turboply` works without setting
+`PYTHONPATH`. CI runs on Ubuntu with a proper toolchain, so
+`maturin develop` works there unaffected. Prefer `maturin develop --release`
+first; fall back to `build.ps1` only if it fails to launch.
 
 ## Status
 

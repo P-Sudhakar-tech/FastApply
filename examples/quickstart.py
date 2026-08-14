@@ -1,8 +1,8 @@
 """Standalone script to manually try out turboply.
 
-Run it directly (no pytest needed) to see the package working end to end:
+Run it directly (no pytest needed) to see the package working end to end.
+Requires the package to be built first (`maturin develop` or `./build.ps1`):
 
-    $env:PYTHONPATH = "python"          # PowerShell, from the repo root
     .venv/Scripts/python.exe examples/quickstart.py
 
 Every check prints PASS/FAIL and compares against plain pandas .apply() so

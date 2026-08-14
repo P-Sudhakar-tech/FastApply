@@ -23,12 +23,13 @@ pytest -v
 If `maturin develop` fails to launch on your machine (e.g. `maturin.exe`
 can't load `api-ms-win-crt-*.dll` because only the GNU Rust toolchain is
 installed and the MSVC Visual C++ Redistributable is missing), use the
-fallback build script instead, which calls `cargo build` directly and drops
-the resulting DLL into the package as a `.pyd`:
+fallback build script instead. It calls `cargo build` directly, drops the
+resulting DLL into the package as a `.pyd`, and links `python/` into the
+venv via a `.pth` file (same end result as `maturin develop`, so
+`import turboply` works from anywhere without setting `PYTHONPATH`):
 
 ```powershell
 ./build.ps1
-$env:PYTHONPATH = "python"
 .venv/Scripts/python.exe -m pytest -v
 ```
 
