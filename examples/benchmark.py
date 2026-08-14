@@ -2,11 +2,15 @@
 
     .venv/Scripts/python.exe examples/benchmark.py
 
-Phase 1 status (see claude.md): .turboply.apply() is currently a pure
-fallback to pandas .apply() — no native dispatch is wired up yet. So the
-timings below are expected to be roughly equal, give or take accessor
-overhead. This script exists as the harness that Phase 2's numeric fast
-path should show a real speedup against once it lands.
+As of Phase 2 (see claude.md), the numeric-transform case below is routed
+through the native affine fast path (decide.py + Rust affine_f64/abs_f64)
+whenever the callable can be verified as a linear/abs transform on a
+numeric Series of at least decide.MIN_ROWS rows; the string and row-wise
+DataFrame cases are still Phase 1's plain pandas fallback (Phases 4/5).
+
+Reported numbers use the median of many repeats with a warmup, since these
+calls run in well under a millisecond and a plain mean is dominated by OS
+scheduling noise at that scale.
 """
 
 import statistics
@@ -18,10 +22,13 @@ import pandas as pd
 import turboply  # noqa: F401  (registers the .turboply accessor)
 
 N_ROWS = 1000
-N_REPEATS = 30
+N_REPEATS = 50
+N_WARMUP = 5
 
 
-def timed(fn, repeats=N_REPEATS):
+def timed(fn, repeats=N_REPEATS, warmup=N_WARMUP):
+    for _ in range(warmup):
+        fn()
     times = []
     for _ in range(repeats):
         start = time.perf_counter()
@@ -31,15 +38,13 @@ def timed(fn, repeats=N_REPEATS):
 
 
 def report(label, pandas_times, turboply_times):
-    p_mean = statistics.mean(pandas_times) * 1000
-    p_stdev = statistics.stdev(pandas_times) * 1000
-    t_mean = statistics.mean(turboply_times) * 1000
-    t_stdev = statistics.stdev(turboply_times) * 1000
-    speedup = p_mean / t_mean if t_mean else float("inf")
+    p_med = statistics.median(pandas_times) * 1000
+    t_med = statistics.median(turboply_times) * 1000
+    speedup = p_med / t_med if t_med else float("inf")
 
     print(label)
-    print(f"  pandas .apply()    {p_mean:8.4f} ms  (stdev {p_stdev:.4f} ms)")
-    print(f"  .turboply.apply()  {t_mean:8.4f} ms  (stdev {t_stdev:.4f} ms)")
+    print(f"  pandas .apply()    {p_med:8.4f} ms (median of {N_REPEATS})")
+    print(f"  .turboply.apply()  {t_med:8.4f} ms (median of {N_REPEATS})")
     print(f"  speedup            {speedup:.2f}x")
     print()
 
@@ -54,31 +59,31 @@ def main():
         }
     )
 
-    print(f"Benchmarking on {N_ROWS} rows, {N_REPEATS} repeats per case\n")
+    print(f"Benchmarking on {N_ROWS} rows, {N_REPEATS} repeats per case (+{N_WARMUP} warmup)\n")
 
     numbers = df["a"]
     report(
-        "Series numeric transform: x * 2 + 1",
+        "Series numeric transform: x * 2 + 1  [native fast path]",
         timed(lambda: numbers.apply(lambda x: x * 2 + 1)),
         timed(lambda: numbers.turboply.apply(lambda x: x * 2 + 1)),
     )
 
     names = df["name"]
     report(
-        "Series string transform: str.upper",
+        "Series string transform: str.upper  [Phase 4, still fallback]",
         timed(lambda: names.apply(str.upper)),
         timed(lambda: names.turboply.apply(str.upper)),
     )
 
     report(
-        "DataFrame row-wise apply (axis=1): row['a'] + row['b']",
+        "DataFrame row-wise apply, axis=1  [Phase 5, still fallback]",
         timed(lambda: df.apply(lambda row: row["a"] + row["b"], axis=1)),
         timed(lambda: df.turboply.apply(lambda row: row["a"] + row["b"], axis=1)),
     )
 
     print(
-        "No speedup yet is expected: Phase 2 (native numeric fast path) hasn't\n"
-        "landed. The numeric-transform case above is the one to watch once it does."
+        "Only the numeric-transform case is accelerated today. String ops and\n"
+        "row-wise DataFrame apply are unchanged pandas fallback until Phases 4/5."
     )
 
 

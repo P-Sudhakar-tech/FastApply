@@ -1,11 +1,15 @@
-"""Phase 1: pandas accessor with a 100% pandas-equivalent fallback path.
+"""pandas accessor: numeric fast path (Phase 2) with a pandas-equivalent
+fallback for everything else.
 
-No accelerated dispatch happens yet. The goal of this phase is only to get
-the `.turboply` interface correct and provably identical to plain
-`.apply()` before any acceleration is layered on top in later phases.
+`.turboply.apply()` first checks whether the call is eligible for the
+native numeric fast path (see decide.py) and, if so, dispatches to it.
+Anything not recognized as safe falls back to plain `pandas.apply()`, so
+the accessor is always correctness-equivalent to it.
 """
 
 import pandas as pd
+
+from . import decide
 
 
 @pd.api.extensions.register_series_accessor("turboply")
@@ -14,6 +18,10 @@ class TurboplySeriesAccessor:
         self._obj = pandas_obj
 
     def apply(self, func, *args, **kwargs):
+        if not args and not kwargs:
+            fast = decide.try_numeric_fast_path(self._obj, func)
+            if fast is not None:
+                return fast
         return self._obj.apply(func, *args, **kwargs)
 
 

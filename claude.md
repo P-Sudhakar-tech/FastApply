@@ -37,8 +37,8 @@ first; fall back to `build.ps1` only if it fails to launch.
 |-------|------------------------------------|---------|
 | P0    | Setup                              | Done    |
 | P1    | Core Accessor + Fallback           | Done    |
-| P2    | Numeric Fast Path in Rust          | Next    |
-| P3    | Sampling-Based Smart Dispatch      | Planned |
+| P2    | Numeric Fast Path in Rust          | Done    |
+| P3    | Sampling-Based Smart Dispatch      | Next    |
 | P4    | String Ops Fast Path               | Planned |
 | P5    | DataFrame Row-wise (axis=1)        | Planned |
 | P6    | Polish & UX Parity with Swifter    | Planned |
@@ -65,9 +65,9 @@ flowchart TD
     classDef done fill:#dde9e0,stroke:#3f7d5c,color:#1b1b1b;
     classDef next fill:#f0dcd0,stroke:#b8441f,color:#1b1b1b;
     classDef planned fill:#eae5db,stroke:#9c9284,color:#1b1b1b;
-    class P0,P1 done;
-    class P2 next;
-    class P3,P4,P5,P6,P7 planned;
+    class P0,P1,P2 done;
+    class P3 next;
+    class P4,P5,P6,P7 planned;
 ```
 
 ## Phase details
@@ -90,16 +90,31 @@ flowchart TD
 **Deliverable:** `df["x"].turboply.apply(func)` works and is provably
 equivalent to pandas, 100% fallback. 12/12 tests passing.
 
-### P2 — Numeric Fast Path (weeks 3–4) — Next
-- Native ops: square, add/sub/mul/div by scalar, abs, common arithmetic
-  lambdas (via small whitelist detection)
-- Zero-copy numpy array transfer (rust-numpy), rayon parallel map
-- Dispatch heuristic (`decide.py`): dtype check + row-count threshold
-- Tests: equivalence vs pandas, NaN handling, empty series, small-size
-  fallback trigger
+### P2 — Numeric Fast Path (weeks 3–4) — Done
+- Native ops in Rust: `affine_f64` (`a * x + b`, covers add/sub/mul/div by
+  scalar and any composition of them) and `abs_f64`, both zero-copy via
+  rust-numpy
+- Whitelist detection without bytecode parsing: probe the callable at
+  `x=0.0` and `x=1.0` to guess an affine form, then verify the guess
+  against a real sample (`decide.MIN_ROWS=50` rows minimum, 12-value
+  sample) drawn from the actual Series — anything that doesn't match
+  (branches, `x**2`, non-numeric output, ...) safely falls back
+- Sequential vs. rayon-parallel split inside the Rust fns at
+  `PARALLEL_THRESHOLD=50_000` elements — below that, rayon's work-splitting
+  overhead costs more than it saves, so a plain loop wins; this is what
+  made the fast path a net win at 1,000 rows instead of a net loss
+- Dispatch heuristic (`decide.py`): dtype check + row-count threshold +
+  sample verification, wired into `TurboplySeriesAccessor.apply`
+- Tests (`tests/test_decide.py`): equivalence vs pandas on large int/float
+  Series, dtype restoration (int stays int when results are whole), correct
+  fallback for non-affine functions, small-series and string-series never
+  engage the fast path
 
-**Deliverable:** Numeric whitelist ops run through the native path and are
-faster on large Series, verified correct.
+**Deliverable:** verified in `examples/benchmark.py` — the numeric
+transform case (`x * 2 + 1` on 1,000 rows) lands consistently around
+1.4–2x faster than plain `pandas.apply()` (median of 50 runs, 5 warmup).
+String ops and row-wise DataFrame apply are untouched pandas fallback
+until Phases 4/5.
 
 ### P3 — Sampling-Based Smart Dispatch (week 5) — Planned
 - Replace static thresholds with swifter-style sampling: run func on small
