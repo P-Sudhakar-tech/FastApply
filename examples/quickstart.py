@@ -49,13 +49,43 @@ def main():
         )
     )
 
-    # 3. Series accessor: string transform.
+    # 3. Series accessor: string transform (small series, plain fallback).
     names = pd.Series(["ada", "grace", "margaret"])
     results.append(
         check(
             "series .turboply(func) (strings) matches pandas",
             names.turboply(str.title),
             names.apply(str.title),
+        )
+    )
+
+    # 3b. Whitelisted string method on a large-enough series: native fast
+    #     path (str.upper/.lower/.strip only — see claude.md for why
+    #     arbitrary string lambdas can't be auto-detected the way
+    #     upper/lower/strip can).
+    many_names = pd.Series(["  Ada  ", "GRACE", "margaret"] * 50)
+    results.append(
+        check(
+            "series .turboply(str.upper) native path matches pandas",
+            many_names.turboply(str.upper),
+            many_names.apply(str.upper),
+        )
+    )
+
+    # 3c. .turboply.str mirrors pandas' own .str accessor for the two
+    #     regex ops that need arguments (contains/replace).
+    results.append(
+        check(
+            ".turboply.str.contains matches pandas",
+            many_names.turboply.str.contains("GRACE"),
+            many_names.str.contains("GRACE", regex=True),
+        )
+    )
+    results.append(
+        check(
+            ".turboply.str.replace matches pandas",
+            many_names.turboply.str.replace(r"\s+", "_"),
+            many_names.str.replace(r"\s+", "_", regex=True),
         )
     )
 

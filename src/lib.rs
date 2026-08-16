@@ -1,6 +1,8 @@
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use regex::Regex;
 
 /// Below this length, rayon's work-splitting/join overhead costs more than
 /// a plain sequential loop saves — so we only parallelize past it.
@@ -77,6 +79,51 @@ fn abs_i64<'py>(py: Python<'py>, arr: PyReadonlyArray1<'py, i64>) -> PyResult<Bo
     Ok(out.into_pyarray_bound(py))
 }
 
+/// Elementwise `s.upper()` over a list of strings. See [`affine_f64`] for
+/// the sequential/parallel threshold rationale.
+#[pyfunction]
+fn str_upper(py: Python<'_>, items: Vec<String>) -> Vec<String> {
+    py.allow_threads(|| elementwise!(items, PARALLEL_THRESHOLD, |s: &String| s.to_uppercase()))
+}
+
+/// Elementwise `s.lower()` over a list of strings.
+#[pyfunction]
+fn str_lower(py: Python<'_>, items: Vec<String>) -> Vec<String> {
+    py.allow_threads(|| elementwise!(items, PARALLEL_THRESHOLD, |s: &String| s.to_lowercase()))
+}
+
+/// Elementwise `s.strip()` over a list of strings — trims Unicode
+/// whitespace from both ends, same as Rust's `str::trim()`.
+#[pyfunction]
+fn str_strip(py: Python<'_>, items: Vec<String>) -> Vec<String> {
+    py.allow_threads(|| elementwise!(items, PARALLEL_THRESHOLD, |s: &String| s.trim().to_string()))
+}
+
+/// Elementwise regex search over a list of strings: does `pattern` match
+/// anywhere in each string? Backs `.turboply.str.contains(pattern)`.
+#[pyfunction]
+fn str_contains(py: Python<'_>, items: Vec<String>, pattern: String) -> PyResult<Vec<bool>> {
+    let re = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(py.allow_threads(|| elementwise!(items, PARALLEL_THRESHOLD, |s: &String| re.is_match(s))))
+}
+
+/// Elementwise regex replace-all over a list of strings. Backs
+/// `.turboply.str.replace(pattern, repl)`. Rust's `regex` crate has no
+/// backreference support (unlike Python's `re`), so patterns/replacements
+/// relying on that won't compile or won't match Python's behavior here —
+/// the caller (decide_str.py) verifies output against real Python `re`
+/// output on a sample before trusting this on the full Series, so that
+/// gap safely falls back rather than silently mismatching.
+#[pyfunction]
+fn str_replace(py: Python<'_>, items: Vec<String>, pattern: String, repl: String) -> PyResult<Vec<String>> {
+    let re = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(py.allow_threads(|| {
+        elementwise!(items, PARALLEL_THRESHOLD, |s: &String| re
+            .replace_all(s, repl.as_str())
+            .into_owned())
+    }))
+}
+
 #[pymodule]
 fn _turboply(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dummy_add, m)?)?;
@@ -84,5 +131,10 @@ fn _turboply(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(affine_i64, m)?)?;
     m.add_function(wrap_pyfunction!(abs_f64, m)?)?;
     m.add_function(wrap_pyfunction!(abs_i64, m)?)?;
+    m.add_function(wrap_pyfunction!(str_upper, m)?)?;
+    m.add_function(wrap_pyfunction!(str_lower, m)?)?;
+    m.add_function(wrap_pyfunction!(str_strip, m)?)?;
+    m.add_function(wrap_pyfunction!(str_contains, m)?)?;
+    m.add_function(wrap_pyfunction!(str_replace, m)?)?;
     Ok(())
 }

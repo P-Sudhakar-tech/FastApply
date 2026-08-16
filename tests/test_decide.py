@@ -100,7 +100,11 @@ def test_small_series_never_engages_fast_path():
     assert decide.try_numeric_fast_path(s, lambda x: x * 2) is None
 
 
-def test_string_series_never_engages_fast_path():
+def test_string_series_never_engages_numeric_fast_path():
+    """decide.py (numeric) should decline a string Series outright — the
+    string whitelist lives in decide_str.py (Phase 4) and is exercised
+    separately in tests/test_decide_str.py; this only checks the numeric
+    module's own boundary."""
     s = pd.Series([f"item_{i}" for i in range(LARGE_N)])
     assert decide.try_numeric_fast_path(s, str.upper) is None
     pd.testing.assert_series_equal(s.turboply.apply(str.upper), s.apply(str.upper))

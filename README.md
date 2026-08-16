@@ -3,12 +3,15 @@
 A drop-in, accelerated replacement for `pandas.apply()`, in the spirit of
 [swifter](https://github.com/jmcarpenter2/swifter).
 
-Status: **Phase 2** — numeric transforms detected as linear/abs (e.g.
-`x * 2 + 1`) on a numeric Series of 50+ rows run through a native fast
+Status: **Phase 4** — numeric transforms detected as linear/abs (e.g.
+`x * 2 + 1`) and whitelisted string methods (`str.upper`/`.lower`/`.strip`,
+plus `.turboply.str.contains()`/`.replace()`) run through a native fast
 path, ~1.9–2x faster than plain `pandas.apply()` on 1,000 rows
-(`examples/benchmark.py`). Everything else falls back to native
-`pandas.apply()`, so `.turboply` is always correctness-equivalent to it.
-See `claude.md` for the full roadmap.
+(`examples/benchmark.py`). Arbitrary callables that don't qualify get a
+sampling-based threaded fallback that only engages when actually measured
+faster (helps I/O-bound work, correctly declines pure-CPU-bound Python).
+Everything else falls back to native `pandas.apply()`, so `.turboply` is
+always correctness-equivalent to it. See `claude.md` for the full roadmap.
 
 ## Development
 
@@ -53,6 +56,16 @@ s.turboply(lambda x: x * 2)   # identical result to s.apply(lambda x: x * 2)
 
 df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
 df.turboply(lambda row: row["a"] + row["b"], axis=1)
+
+# Whitelisted string methods run through the native path too:
+names = pd.Series(["  Ada  ", "GRACE", "margaret"] * 50)
+names.turboply(str.upper)
+names.turboply(str.strip)
+
+# Regex-backed ops mirror pandas' own .str accessor (called directly,
+# not inferred from a lambda — see claude.md for why):
+names.turboply.str.contains(r"^GRACE$")
+names.turboply.str.replace(r"\s+", "_")
 ```
 
 ### Options
@@ -76,8 +89,9 @@ s.turboply(func, progress_bar=True) # progress bar for the pandas-fallback path 
 `examples/benchmark.py` compares plain `pandas.apply()` against `.turboply()`
 on 1,000 rows (median of 50 runs, 5 warmup): the numeric-transform case
 (`x * 2 + 1`) lands at **~1.9–2x**, since it's eligible for the native fast
-path; string ops and row-wise `DataFrame.apply` are unchanged pandas fallback
-(that's Phases 4/5, not yet built).
+path; row-wise `DataFrame.apply` is unchanged pandas fallback unless a
+threaded-parallel win is measured (Phase 3) — there's no native DataFrame
+fast path yet (that's Phase 5).
 
 `examples/benchmark_vs_swifter.py` adds a comparison against
 [swifter](https://github.com/jmcarpenter2/swifter)'s `.apply()`. It's a

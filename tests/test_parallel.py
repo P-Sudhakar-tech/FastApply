@@ -9,6 +9,25 @@ from turboply import parallel
 
 N_ROWS = parallel.MIN_ROWS + 200
 
+# parallel.py's tier-2 dispatch is a genuine timing race (sample serial vs.
+# threaded, use whichever measured faster) — that's the point of it, but it
+# means a single run can occasionally lose the race to scheduling noise on a
+# busy machine/CI runner even when threading legitimately helps. Retrying a
+# few times keeps these tests meaningful (still exercising real behavior,
+# not mocked) without being flaky.
+_ATTEMPTS = 5
+
+
+def _eventually(attempt, attempts=_ATTEMPTS):
+    last_error = None
+    for _ in range(attempts):
+        try:
+            if attempt():
+                return
+        except AssertionError as exc:
+            last_error = exc
+    raise AssertionError(f"condition never true in {attempts} attempts") from last_error
+
 
 def _gil_releasing_func(thread_ids):
     """A callable that sleeps (releases the GIL) and records which thread
@@ -21,7 +40,7 @@ def _gil_releasing_func(thread_ids):
 
     def func(x):
         thread_ids.add(threading.get_ident())
-        time.sleep(0.0005)
+        time.sleep(0.001)
         return f"row-{x}"
 
     return func
@@ -47,17 +66,21 @@ def test_parallel_fallback_matches_pandas_for_gil_releasing_func():
 
 def test_parallel_fallback_matches_pandas_for_dataframe_axis1():
     df = pd.DataFrame({"a": range(N_ROWS), "b": range(N_ROWS)})
-    thread_ids = set()
-
-    def func(row):
-        thread_ids.add(threading.get_ident())
-        time.sleep(0.0005)
-        return f"{row['a']}-{row['b']}"
-
     expected = df.apply(lambda row: f"{row['a']}-{row['b']}", axis=1)
-    result = df.turboply(func, axis=1)
-    pd.testing.assert_series_equal(result, expected)
-    assert len(thread_ids) > 1, "expected the row-wise func to run on multiple threads"
+
+    def attempt():
+        thread_ids = set()
+
+        def func(row):
+            thread_ids.add(threading.get_ident())
+            time.sleep(0.001)
+            return f"{row['a']}-{row['b']}"
+
+        result = df.turboply(func, axis=1)
+        pd.testing.assert_series_equal(result, expected)
+        return len(thread_ids) > 1
+
+    _eventually(attempt)
 
 
 def test_cpu_bound_func_still_correct_even_if_not_parallelized():
@@ -70,14 +93,17 @@ def test_cpu_bound_func_still_correct_even_if_not_parallelized():
     pd.testing.assert_series_equal(result, expected)
 
 
-# --- real multi-thread engagement (not timing-based, so not flaky) --------
+# --- real multi-thread engagement (not mocked, so retried against timing noise) --
 
 
 def test_gil_releasing_func_actually_runs_on_multiple_threads():
-    thread_ids = set()
-    s = pd.Series(range(N_ROWS))
-    s.turboply(_gil_releasing_func(thread_ids))
-    assert len(thread_ids) > 1, "expected the sleep-based func to engage the thread pool"
+    def attempt():
+        thread_ids = set()
+        s = pd.Series(range(N_ROWS))
+        s.turboply(_gil_releasing_func(thread_ids))
+        return len(thread_ids) > 1
+
+    _eventually(attempt)
 
 
 def test_try_parallel_fallback_returns_none_below_min_rows():
@@ -98,10 +124,12 @@ def test_try_parallel_fallback_returns_none_when_func_raises():
 
 
 def test_verbose_reports_threaded_parallel_engine(capsys):
-    s = pd.Series(range(N_ROWS))
-    s.turboply(_gil_releasing_func(set()), verbose=True)
-    err = capsys.readouterr().err
-    assert "engine=threaded-parallel" in err
+    def attempt():
+        s = pd.Series(range(N_ROWS))
+        s.turboply(_gil_releasing_func(set()), verbose=True)
+        return "engine=threaded-parallel" in capsys.readouterr().err
+
+    _eventually(attempt)
 
 
 # --- engine="pandas" bypasses the parallel tier too -------------------------

@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.22", features = ["extension-module"] }
 rayon = "1.10"
 numpy = "0.22"
+regex = "1.10"
 
 [profile.release]
 lto = true
