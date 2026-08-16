@@ -3,9 +3,12 @@
 A drop-in, accelerated replacement for `pandas.apply()`, in the spirit of
 [swifter](https://github.com/jmcarpenter2/swifter).
 
-Status: **Phase 0/1** — the `.turboply` accessor exists and always falls back
-to native `pandas.apply()`. No accelerated dispatch is wired up yet; see
-`claude.md` for the full roadmap.
+Status: **Phase 2** — numeric transforms detected as linear/abs (e.g.
+`x * 2 + 1`) on a numeric Series of 50+ rows run through a native fast
+path, ~1.9–2x faster than plain `pandas.apply()` on 1,000 rows
+(`examples/benchmark.py`). Everything else falls back to native
+`pandas.apply()`, so `.turboply` is always correctness-equivalent to it.
+See `claude.md` for the full roadmap.
 
 ## Development
 
@@ -38,13 +41,16 @@ properly provisioned toolchain, so `maturin develop` works there regardless.
 
 ## Usage
 
+The accessor is directly callable — `s.turboply(func)` is the primary API,
+not `s.turboply.apply(func)` (kept only as an alias):
+
 ```python
 import pandas as pd
 import turboply  # registers the .turboply accessor
 
 s = pd.Series([1, 2, 3])
-s.turboply.apply(lambda x: x * 2)   # identical result to s.apply(lambda x: x * 2)
+s.turboply(lambda x: x * 2)   # identical result to s.apply(lambda x: x * 2)
 
 df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
-df.turboply.apply(lambda row: row["a"] + row["b"], axis=1)
+df.turboply(lambda row: row["a"] + row["b"], axis=1)
 ```

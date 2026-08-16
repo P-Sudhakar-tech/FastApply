@@ -1,9 +1,11 @@
+from unittest import mock
+
 import numpy as np
 import pandas as pd
 import pytest
 
 import turboply  # noqa: F401  (registers the .turboply accessor)
-from turboply import decide
+from turboply import _turboply, decide
 
 
 LARGE_N = 1000
@@ -65,6 +67,32 @@ def test_non_affine_func_falls_back_correctly_on_large_series(func):
     expected = s.apply(func)
     result = s.turboply.apply(func)
     pd.testing.assert_series_equal(result, expected)
+
+
+def test_int_series_with_whole_coefficients_uses_int64_path_not_float():
+    """x * 2 + 1 on an int64 Series should skip the float64 round-trip
+    entirely and call the dedicated int64 native fn."""
+    s = pd.Series(np.arange(LARGE_N, dtype="int64"))
+    with mock.patch.object(_turboply, "affine_i64", wraps=_turboply.affine_i64) as spy_i64, \
+         mock.patch.object(_turboply, "affine_f64", wraps=_turboply.affine_f64) as spy_f64:
+        result = decide.try_numeric_fast_path(s, lambda x: x * 2 + 1)
+    assert result is not None
+    assert result.dtype == np.int64
+    spy_i64.assert_called_once()
+    spy_f64.assert_not_called()
+
+
+def test_int_series_with_fractional_coefficients_uses_float_path():
+    """x / 3 on an int64 Series can't stay integral, so it must use the
+    float64 path (and pandas would return float64 too)."""
+    s = pd.Series(np.arange(LARGE_N, dtype="int64"))
+    with mock.patch.object(_turboply, "affine_i64", wraps=_turboply.affine_i64) as spy_i64, \
+         mock.patch.object(_turboply, "affine_f64", wraps=_turboply.affine_f64) as spy_f64:
+        result = decide.try_numeric_fast_path(s, lambda x: x / 3)
+    assert result is not None
+    assert result.dtype == np.float64
+    spy_f64.assert_called_once()
+    spy_i64.assert_not_called()
 
 
 def test_small_series_never_engages_fast_path():

@@ -91,9 +91,13 @@ flowchart TD
 equivalent to pandas, 100% fallback. 12/12 tests passing.
 
 ### P2 — Numeric Fast Path (weeks 3–4) — Done
-- Native ops in Rust: `affine_f64` (`a * x + b`, covers add/sub/mul/div by
-  scalar and any composition of them) and `abs_f64`, both zero-copy via
-  rust-numpy
+- Native ops in Rust: `affine_f64`/`affine_i64` (`a * x + b`, covers
+  add/sub/mul/div by scalar and any composition of them) and
+  `abs_f64`/`abs_i64`, all zero-copy via rust-numpy. Dedicated int64
+  variants exist so an integer Series with whole-number coefficients never
+  pays for a float64 round-trip (cast the full array to float, then a
+  rounding pass to restore the dtype afterwards) — it stays int64 the
+  whole way through and skips the restoration step entirely.
 - Whitelist detection without bytecode parsing: probe the callable at
   `x=0.0` and `x=1.0` to guess an affine form, then verify the guess
   against a real sample (`decide.MIN_ROWS=50` rows minimum, 12-value
@@ -104,17 +108,27 @@ equivalent to pandas, 100% fallback. 12/12 tests passing.
   overhead costs more than it saves, so a plain loop wins; this is what
   made the fast path a net win at 1,000 rows instead of a net loss
 - Dispatch heuristic (`decide.py`): dtype check + row-count threshold +
-  sample verification, wired into `TurboplySeriesAccessor.apply`
+  sample verification + int64-vs-float64 path selection, wired into
+  `TurboplySeriesAccessor.__call__`
 - Tests (`tests/test_decide.py`): equivalence vs pandas on large int/float
-  Series, dtype restoration (int stays int when results are whole), correct
-  fallback for non-affine functions, small-series and string-series never
-  engage the fast path
+  Series, dtype restoration, correct fallback for non-affine functions,
+  small-series and string-series never engage the fast path, and
+  mock-verified proof that the int64 path is actually used (not just
+  coincidentally correct via the float path) when coefficients are whole
 
 **Deliverable:** verified in `examples/benchmark.py` — the numeric
 transform case (`x * 2 + 1` on 1,000 rows) lands consistently around
-1.4–2x faster than plain `pandas.apply()` (median of 50 runs, 5 warmup).
+1.9–2x faster than plain `pandas.apply()` (median of 50 runs, 5 warmup).
 String ops and row-wise DataFrame apply are untouched pandas fallback
 until Phases 4/5.
+
+## API convention
+
+The accessor is directly callable — `s.turboply(func)` is the primary,
+documented API, not `s.turboply.apply(func)`. `.apply()` is kept only as
+an alias (`apply = __call__` on both accessor classes) so it still works
+for anyone reaching for the pandas-familiar spelling, but new examples and
+docs should lead with the direct-call form.
 
 ### P3 — Sampling-Based Smart Dispatch (week 5) — Planned
 - Replace static thresholds with swifter-style sampling: run func on small

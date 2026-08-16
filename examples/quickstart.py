@@ -6,8 +6,9 @@ Requires the package to be built first (`maturin develop` or `./build.ps1`):
     .venv/Scripts/python.exe examples/quickstart.py
 
 Every check prints PASS/FAIL and compares against plain pandas .apply() so
-you can see for yourself that the .turboply accessor is a correctness-safe
-drop-in replacement.
+you can see for yourself that `s.turboply(func)` — the primary API, the
+accessor is directly callable — is a correctness-safe drop-in replacement.
+`.turboply.apply(func)` still works too, as an alias.
 """
 
 import pandas as pd
@@ -35,8 +36,8 @@ def main():
     s = pd.Series([1, 2, 3, 4, 5])
     results.append(
         check(
-            "series .turboply.apply matches pandas",
-            s.turboply.apply(lambda x: x * 2),
+            "series .turboply(func) matches pandas",
+            s.turboply(lambda x: x * 2),
             s.apply(lambda x: x * 2),
         )
     )
@@ -45,8 +46,8 @@ def main():
     names = pd.Series(["ada", "grace", "margaret"])
     results.append(
         check(
-            "series .turboply.apply (strings) matches pandas",
-            names.turboply.apply(str.title),
+            "series .turboply(func) (strings) matches pandas",
+            names.turboply(str.title),
             names.apply(str.title),
         )
     )
@@ -55,8 +56,8 @@ def main():
     df = pd.DataFrame({"a": [1, 2, 3], "b": [10, 20, 30]})
     results.append(
         check(
-            "dataframe .turboply.apply (axis=0) matches pandas",
-            df.turboply.apply(lambda col: col.sum()),
+            "dataframe .turboply(func) (axis=0) matches pandas",
+            df.turboply(lambda col: col.sum()),
             df.apply(lambda col: col.sum()),
         )
     )
@@ -64,8 +65,8 @@ def main():
     # 5. DataFrame accessor: row-wise apply (axis=1).
     results.append(
         check(
-            "dataframe .turboply.apply (axis=1) matches pandas",
-            df.turboply.apply(lambda row: row["a"] + row["b"], axis=1),
+            "dataframe .turboply(func) (axis=1) matches pandas",
+            df.turboply(lambda row: row["a"] + row["b"], axis=1),
             df.apply(lambda row: row["a"] + row["b"], axis=1),
         )
     )
@@ -75,8 +76,17 @@ def main():
     results.append(
         check(
             "empty series fallback matches pandas",
-            empty.turboply.apply(lambda x: x),
+            empty.turboply(lambda x: x),
             empty.apply(lambda x: x),
+        )
+    )
+
+    # 7. .apply() still works as an alias for the direct-call form.
+    results.append(
+        check(
+            ".turboply.apply(func) alias matches .turboply(func)",
+            s.turboply.apply(lambda x: x * 2),
+            s.turboply(lambda x: x * 2),
         )
     )
 

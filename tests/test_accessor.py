@@ -60,3 +60,24 @@ def test_empty_series_fallback():
     expected = s.apply(lambda x: x)
     result = s.turboply.apply(lambda x: x)
     pd.testing.assert_series_equal(result, expected)
+
+
+def test_series_direct_call_matches_apply():
+    """s.turboply(func) is the primary API; .apply() is kept as an alias."""
+    s = pd.Series(range(-5, 6))
+    func = lambda x: x * 3 + 1  # noqa: E731
+    pd.testing.assert_series_equal(s.turboply(func), s.turboply.apply(func))
+    pd.testing.assert_series_equal(s.turboply(func), s.apply(func))
+
+
+def test_dataframe_direct_call_matches_apply():
+    df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+    func = lambda row: row["a"] + row["b"]  # noqa: E731
+    pd.testing.assert_series_equal(
+        df.turboply(func, axis=1), df.turboply.apply(func, axis=1)
+    )
+
+
+def test_turboply_accessor_is_callable():
+    s = pd.Series([1, 2, 3])
+    assert callable(s.turboply)
