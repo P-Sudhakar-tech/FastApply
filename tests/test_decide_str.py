@@ -26,9 +26,12 @@ def test_whitelisted_method_matches_pandas(func):
 
 
 def test_whitelisted_method_actually_calls_native(monkeypatch):
+    """engine="auto" deliberately never reaches the string native path
+    (see accessor.py's docstring — it's measurably never faster); only
+    engine="native" (an explicit override) does."""
     s = _large_str_series()
     with mock.patch.object(_turboply, "str_upper", wraps=_turboply.str_upper) as spy:
-        result = s.turboply(str.upper)
+        result = s.turboply(str.upper, engine="native")
     assert result.equals(s.apply(str.upper))
     # verified_native() calls native_fn twice by design: once on the
     # sample to verify it agrees with Python, once on the full Series.
@@ -94,9 +97,19 @@ def test_engine_native_raises_for_non_whitelisted_string_method():
 
 def test_verbose_reports_native_string_engine(capsys):
     s = _large_str_series()
-    s.turboply(str.upper, verbose=True)
+    s.turboply(str.upper, engine="native", verbose=True)
     err = capsys.readouterr().err
     assert "engine=native-str-upper" in err
+
+
+def test_auto_engine_never_uses_string_native_path(capsys):
+    """The core Phase 4 finding: engine="auto" must never pick the string
+    native path, since it's measurably never faster than plain pandas."""
+    s = _large_str_series()
+    result = s.turboply(str.upper, verbose=True)
+    pd.testing.assert_series_equal(result, s.apply(str.upper))
+    err = capsys.readouterr().err
+    assert "native-str" not in err
 
 
 # --- .turboply.str.contains / .replace --------------------------------------

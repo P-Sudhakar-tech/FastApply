@@ -1,9 +1,9 @@
 """pandas accessor: numeric fast path (Phase 2), whitelisted string fast
-path (Phase 4), sampling-based parallel fallback for arbitrary callables
-(Phase 3), and a pandas-equivalent fallback for everything else — plus
-Phase 6 UX polish: engine selection, verbose routing explanations, and an
-optional progress bar for whichever path ends up doing a row-by-row
-Python loop.
+path (Phase 4), DataFrame row-wise fast path (Phase 5), sampling-based
+parallel fallback for arbitrary callables (Phase 3), and a
+pandas-equivalent fallback for everything else — plus Phase 6 UX polish:
+engine selection, verbose routing explanations, and an optional progress
+bar for whichever path ends up doing a row-by-row Python loop.
 
 The accessor is directly callable — `s.turboply(func)` — instead of
 requiring the `.apply()` method name. `.apply()` is kept as an alias for
@@ -13,23 +13,35 @@ primary, documented API. `s.turboply.str.contains(pattern)` /
 regex ops that need arguments a lambda-probing approach can't safely
 recover (see str_accessor.py).
 
-Four tiers are tried in order under `engine="auto"`:
+Series tries, in order, under `engine="auto"`:
   1. Native numeric fast path (decide.py) — vectorized, single call.
-  2. Native string fast path (decide_str.py) — exact identity match
-     against str.upper/.lower/.strip, verified on a sample.
-  3. Threaded parallel fallback (parallel.py) — only engages when a
+  2. Threaded parallel fallback (parallel.py) — only engages when a
      sample measurement shows it's actually faster than serial (true for
      I/O-bound or otherwise GIL-releasing callables; a no-op for
      CPU-bound pure Python, which the GIL prevents from parallelizing).
-  4. Plain pandas .apply().
+  3. Plain pandas .apply().
+
+The native string fast path (decide_str.py — exact identity match against
+str.upper/.lower/.strip, verified on a sample) is deliberately NOT in the
+"auto" chain: benchmarked from 500 to 1,000,000 rows, it's consistently
+~0.6-0.8x plain pandas, never faster (owned-String FFI round-trip costs
+more than CPython's already-fast built-in string methods save — unlike
+the numeric path's genuine zero-copy numpy view). It's only reachable via
+`engine="native"` (an explicit override, correctness-verified as always
+but without an implied speed promise) or `.turboply.str.contains()`/
+`.replace()` (str_accessor.py), which the same caveat applies to.
+
+DataFrame row-wise (axis=1) tries the same shape, with tier 1 being
+decide_row.py's row-affine detection instead — axis=0 (column-wise) has
+no native fast path (Phase 5 only covers row-wise), so it only ever gets
+tiers 3-4.
 
 `engine`:
-  - "auto" (default) — try tiers 1-3, silently fall back to plain pandas
-    if none is eligible.
-  - "native" — require tier 1 or 2; raises ValueError with the specific
-    reason if the callable isn't eligible. There's no DataFrame fast path
-    yet, so this always raises on the DataFrame accessor.
-  - "pandas" — skip tiers 1-3 entirely and always use plain pandas
+  - "auto" (default) — try the native/string/row tiers then the parallel
+    tier, silently fall back to plain pandas if none is eligible.
+  - "native" — require a native tier; raises ValueError with the specific
+    reason if the callable isn't eligible.
+  - "pandas" — skip every accelerated tier and always use plain pandas
     .apply().
 
 `verbose=True` prints which tier was chosen and why to stderr.
@@ -42,7 +54,7 @@ import sys
 
 import pandas as pd
 
-from . import decide, decide_str, parallel
+from . import decide, decide_row, decide_str, parallel
 from .progress import with_progress
 from .str_accessor import TurboplyStrAccessor
 
@@ -59,20 +71,48 @@ def _log(verbose, label, engine, reason):
         print(f"[turboply] {label}: engine={engine} - {reason}", file=sys.stderr)
 
 
-def _decide_series(series, func):
-    """Try the numeric fast path, then the string fast path. Prefers
-    reporting whichever decision is more relevant to the Series' actual
-    dtype when both decline, so verbose/error messages point at the real
-    reason rather than an irrelevant one from the other tier."""
+def _decide_series(series, func, engine):
+    """Try the numeric fast path, then — only under engine="native" — the
+    string fast path. Prefers reporting whichever decision is more
+    relevant to the Series' actual dtype when both decline, so
+    verbose/error messages point at the real reason rather than an
+    irrelevant one from the other tier.
+
+    decide_str's native path is NOT tried under engine="auto": extensive
+    benchmarking (500 to 1,000,000 rows, all four whitelisted ops) found
+    it's consistently ~0.6-0.8x plain pandas, never faster, because the
+    owned-String round-trip through the Rust boundary (allocate + copy on
+    the way in, allocate + copy new Python str objects on the way out,
+    plus constructing the result Series) costs more than CPython's
+    already-fast built-in string methods save — unlike the numeric path,
+    which gets a genuine zero-copy view into the numpy buffer. "auto"
+    promises "never worse than plain pandas, sometimes better", so it
+    skips a tier proven to only ever be worse. engine="native" is an
+    explicit override — the caller is asking for the compiled path
+    regardless — so it still tries decide_str, correctness-verified as
+    always, just without an implied performance promise. See claude.md."""
     decision = decide.decide(series, func)
     if decision.result is not None:
         return decision
+    if engine != "native":
+        return decision
+
     str_decision = decide_str.decide(series, func)
     if str_decision.result is not None:
         return str_decision
     if not pd.api.types.is_numeric_dtype(series.dtype):
         return str_decision
     return decision
+
+
+def _parallel_decision_log(verbose, label, result):
+    if result is not None:
+        _log(
+            verbose,
+            label,
+            "threaded-parallel",
+            f"sample of {parallel.SAMPLE_ROWS} rows measured >= {parallel.MIN_SPEEDUP}x faster threaded than serial",
+        )
 
 
 @pd.api.extensions.register_series_accessor("turboply")
@@ -90,7 +130,7 @@ class TurboplySeriesAccessor:
         no_extra_args = not args and not kwargs
 
         if engine != "pandas" and no_extra_args:
-            decision = _decide_series(series, func)
+            decision = _decide_series(series, func, engine)
             _log(verbose, "series", decision.engine, decision.reason)
             if decision.result is not None:
                 return decision.result
@@ -98,14 +138,8 @@ class TurboplySeriesAccessor:
                 raise ValueError(f"engine='native' requested but not eligible: {decision.reason}")
 
             parallel_result = parallel.try_parallel_fallback(series, func)
+            _parallel_decision_log(verbose, "series", parallel_result)
             if parallel_result is not None:
-                _log(
-                    verbose,
-                    "series",
-                    "threaded-parallel",
-                    f"sample of {parallel.SAMPLE_ROWS} rows measured >= "
-                    f"{parallel.MIN_SPEEDUP}x faster threaded than serial",
-                )
                 return parallel_result
         else:
             reason = (
@@ -131,28 +165,26 @@ class TurboplyDataFrameAccessor:
 
     def __call__(self, func, *args, engine="auto", verbose=False, progress_bar=False, axis=0, **kwargs):
         _check_engine(engine)
-        if engine == "native":
-            raise ValueError(
-                "engine='native' requested but not eligible: no DataFrame fast path yet (see roadmap Phase 5)"
-            )
-
         df = self._obj
         no_extra_args = not args and not kwargs
         is_row_wise = axis in (1, "columns")
 
-        if engine == "auto" and is_row_wise and no_extra_args:
+        if engine != "pandas" and is_row_wise and no_extra_args:
+            decision = decide_row.decide(df, func)
+            _log(verbose, "dataframe", decision.engine, decision.reason)
+            if decision.result is not None:
+                return decision.result
+            if engine == "native":
+                raise ValueError(f"engine='native' requested but not eligible: {decision.reason}")
+
             parallel_result = parallel.try_parallel_fallback(df, func, axis=1)
+            _parallel_decision_log(verbose, "dataframe", parallel_result)
             if parallel_result is not None:
-                _log(
-                    verbose,
-                    "dataframe",
-                    "threaded-parallel",
-                    f"sample of {parallel.SAMPLE_ROWS} rows measured >= "
-                    f"{parallel.MIN_SPEEDUP}x faster threaded than serial",
-                )
                 return parallel_result
-            _log(verbose, "dataframe", "pandas", "no native fast path yet, sample showed no threading benefit")
         else:
+            if engine == "native":
+                reason = "no fast path for axis=0 (column-wise) yet" if not is_row_wise else "extra args/kwargs passed"
+                raise ValueError(f"engine='native' requested but not eligible: {reason}")
             reason = "engine='pandas' forced" if engine == "pandas" else "no native or parallel fast path applies"
             _log(verbose, "dataframe", "pandas", reason)
 

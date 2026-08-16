@@ -59,21 +59,28 @@ def main():
         )
     )
 
-    # 3b. Whitelisted string method on a large-enough series: native fast
-    #     path (str.upper/.lower/.strip only — see claude.md for why
-    #     arbitrary string lambdas can't be auto-detected the way
-    #     upper/lower/strip can).
+    # 3b. Whitelisted string method, explicitly forced to the native path
+    #     (engine="native"). Note this is NOT what engine="auto"/the
+    #     default does for strings: benchmarking found the native string
+    #     path is consistently ~0.6-0.8x plain pandas at every scale
+    #     tested (500 to 1,000,000 rows) due to owned-String FFI
+    #     round-trip costs, so "auto" never picks it — see accessor.py's
+    #     module docstring and claude.md for the numbers. engine="native"
+    #     still verifies correctness against pandas on a sample the same
+    #     way; it just doesn't imply a performance win the way the
+    #     numeric/row-wise fast paths do.
     many_names = pd.Series(["  Ada  ", "GRACE", "margaret"] * 50)
     results.append(
         check(
-            "series .turboply(str.upper) native path matches pandas",
-            many_names.turboply(str.upper),
+            "series .turboply(str.upper, engine='native') matches pandas",
+            many_names.turboply(str.upper, engine="native"),
             many_names.apply(str.upper),
         )
     )
 
     # 3c. .turboply.str mirrors pandas' own .str accessor for the two
-    #     regex ops that need arguments (contains/replace).
+    #     regex ops that need arguments (contains/replace). Same
+    #     performance caveat as 3b applies here too.
     results.append(
         check(
             ".turboply.str.contains matches pandas",

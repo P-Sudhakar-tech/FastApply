@@ -52,7 +52,25 @@ def test_engine_native_raises_when_series_too_small():
         s.turboply(lambda x: x * 2, engine="native")
 
 
-def test_engine_native_raises_on_dataframe():
+def test_engine_native_raises_on_dataframe_axis0():
+    """Phase 5 only covers row-wise (axis=1); axis=0 (column-wise) has no
+    native path regardless of the function or DataFrame size."""
+    df = pd.DataFrame({"a": range(200), "b": range(200)})
+    with pytest.raises(ValueError, match="not eligible"):
+        df.turboply(lambda col: col.sum(), engine="native")
+
+
+def test_engine_native_succeeds_on_large_row_wise_dataframe():
+    """The same row['a'] + row['b'] shape that used to always raise
+    (before Phase 5's row-wise fast path existed) now succeeds once the
+    DataFrame is large enough to be worth it."""
+    df = pd.DataFrame({"a": range(200), "b": range(200)})
+    expected = df.apply(lambda row: row["a"] + row["b"], axis=1)
+    result = df.turboply(lambda row: row["a"] + row["b"], axis=1, engine="native")
+    pd.testing.assert_series_equal(result, expected)
+
+
+def test_engine_native_raises_on_small_row_wise_dataframe():
     df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
     with pytest.raises(ValueError, match="not eligible"):
         df.turboply(lambda row: row["a"] + row["b"], axis=1, engine="native")
@@ -117,8 +135,13 @@ def test_progress_bar_silent_when_native_path_used(capsys):
 
 
 def test_progress_bar_on_dataframe_row_apply(capsys):
+    """Uses string concatenation, not row['a'] + row['b'], so this stays
+    on the pandas-fallback path — a numeric sum would now be caught by
+    Phase 5's native row-affine fast path (correctly: it's a single
+    vectorized call, so there's no per-row progress to report there)."""
     df = pd.DataFrame({"a": range(150), "b": range(150)})
-    result = df.turboply(lambda row: row["a"] + row["b"], axis=1, progress_bar=True)
-    pd.testing.assert_series_equal(result, df.apply(lambda row: row["a"] + row["b"], axis=1))
+    func = lambda row: f"{row['a']}-{row['b']}"  # noqa: E731
+    result = df.turboply(func, axis=1, progress_bar=True)
+    pd.testing.assert_series_equal(result, df.apply(func, axis=1))
     err = capsys.readouterr().err
     assert "150/150" in err

@@ -10,6 +10,16 @@ trusted on the full Series (decide_str.verified_native), so an
 incompatibility between Rust's `regex` crate and Python's `re` (e.g. a
 pattern using backreferences, which Rust's regex crate doesn't support)
 falls back to plain pandas rather than silently mismatching.
+
+Performance caveat, measured rather than assumed: unlike the numeric
+fast path (a genuine zero-copy numpy view), string data has to be
+copied into owned Rust Strings on the way in and new Python str objects
+on the way out. Benchmarked across pattern complexity and row counts up
+to 1,000,000, that round-trip consistently costs more than it saves —
+these methods are correct and will fall back automatically if native
+output doesn't match Python's, but calling them isn't a performance
+recommendation the way `.turboply(func)`'s numeric/row-wise fast paths
+are. See accessor.py's module docstring and claude.md for the numbers.
 """
 
 import re
@@ -35,6 +45,7 @@ class TurboplyStrAccessor:
             lambda items: _turboply.str_contains(items, pattern),
             lambda s: bool(re.search(pattern, s)),
             "native-str-contains",
+            dtype=bool,
         )
         _log(verbose, "contains", decision.engine, decision.reason)
         if decision.result is not None:
@@ -48,6 +59,7 @@ class TurboplyStrAccessor:
             lambda items: _turboply.str_replace(items, pattern, repl),
             lambda s: re.sub(pattern, repl, s),
             "native-str-replace",
+            dtype=series.dtype,
         )
         _log(verbose, "replace", decision.engine, decision.reason)
         if decision.result is not None:

@@ -75,11 +75,11 @@ cibuildwheel config layer on top.
 | P0    | Setup                              | Done    |
 | P1    | Core Accessor + Fallback           | Done    |
 | P2    | Numeric Fast Path in Rust          | Done    |
-| P3    | Sampling-Based Smart Dispatch      | Next    |
-| P4    | String Ops Fast Path               | Planned |
-| P5    | DataFrame Row-wise (axis=1)        | Planned |
+| P3    | Sampling-Based Smart Dispatch      | Done    |
+| P4    | String Ops Fast Path               | Done**  |
+| P5    | DataFrame Row-wise (axis=1)        | Done    |
 | P6    | Polish & UX Parity with Swifter    | Done*   |
-| P7    | Benchmarking & Hardening           | Planned |
+| P7    | Benchmarking & Hardening           | Next    |
 
 \* P6: engine selection, verbose routing explanations, progress bar, and
 wheel packaging are all done — see "Polish & UX" and "Publishing" below.
@@ -87,6 +87,12 @@ The one open item is live benchmark numbers against swifter: swifter
 1.4.0 doesn't run cleanly against this repo's pandas/Python versions (a
 swifter/dask compatibility gap, not a turboply issue) — see
 `examples/benchmark_vs_swifter.py`'s error message for specifics.
+
+\*\* P4: correctly implemented and fully tested, but benchmarking (500 to
+1,000,000 rows) found the native string path is consistently ~0.6-0.8x
+plain pandas — never faster — so it's deliberately excluded from
+`engine="auto"`, reachable only via explicit `engine="native"` or
+`.turboply.str.contains()`/`.replace()`. See the P4 section below for why.
 
 ## Flow
 
@@ -109,9 +115,8 @@ flowchart TD
     classDef done fill:#dde9e0,stroke:#3f7d5c,color:#1b1b1b;
     classDef next fill:#f0dcd0,stroke:#b8441f,color:#1b1b1b;
     classDef planned fill:#eae5db,stroke:#9c9284,color:#1b1b1b;
-    class P0,P1,P2,P6 done;
-    class P3 next;
-    class P4,P5,P7 planned;
+    class P0,P1,P2,P3,P4,P5,P6 done;
+    class P7 next;
 ```
 
 ## Phase details
@@ -163,8 +168,6 @@ equivalent to pandas, 100% fallback. 12/12 tests passing.
 **Deliverable:** verified in `examples/benchmark.py` — the numeric
 transform case (`x * 2 + 1` on 1,000 rows) lands consistently around
 1.9–2x faster than plain `pandas.apply()` (median of 50 runs, 5 warmup).
-String ops and row-wise DataFrame apply are untouched pandas fallback
-until Phases 4/5.
 
 ## API convention
 
@@ -174,36 +177,123 @@ an alias (`apply = __call__` on both accessor classes) so it still works
 for anyone reaching for the pandas-familiar spelling, but new examples and
 docs should lead with the direct-call form.
 
-### P3 — Sampling-Based Smart Dispatch (week 5) — Planned
-- Replace static thresholds with swifter-style sampling: run func on small
-  sample via both pandas and the native equivalent (if eligible), pick the
-  faster path
-- Handle arbitrary (non-whitelisted) Python callables via GIL-released
-  rayon-parallel fallback (multi-threaded, not compiled — still faster than
-  serial pandas)
-- Tests: dispatch picks correct path under different data sizes/functions;
-  parallel fallback correctness
+### P3 — Sampling-Based Smart Dispatch (week 5) — Done
+- `parallel.py`: for callables that don't qualify for a native fast path,
+  time a small sample (`SAMPLE_ROWS=100`) both serially and
+  threaded-chunked (`ThreadPoolExecutor`), and only use the threaded
+  version on the full data if the sample measured a real speedup
+  (`MIN_SPEEDUP=1.2x`). This is a measured decision, not an assumption:
+  CPython's GIL means pure-Python CPU-bound callables see no benefit from
+  threading (only one thread runs bytecode at a time) and the race
+  correctly converges to serial pandas for those; I/O-bound or otherwise
+  GIL-releasing callables (sleep, network/file I/O, hashlib, ...) do
+  benefit, and the race correctly picks up on that.
+- Chunking is only safe by contiguous row ranges, so this applies to
+  `Series.apply` and `DataFrame.apply(axis=1)` — never `axis=0`, where
+  func operates on whole columns rather than independent rows.
+- `MIN_ROWS=2000`: below this, the sample-timing measurement itself
+  (extra calls beyond what a plain serial run needs) costs more than
+  skipping straight to serial is worth.
+- Wired into the accessor as the tier after any native fast path, under
+  `engine="auto"`; `engine="pandas"` skips it entirely.
+- Tests (`tests/test_parallel.py`): correctness for Series and
+  `axis=1`, and — since asserting on wall-clock timing directly would be
+  flaky in CI — proof of genuine multi-thread engagement via recording
+  thread idents inside a sleep-based test callable, with a small retry
+  helper for the inherent (confirmed ~1-in-450-runs) timing-race
+  flakiness rather than mocking away the real behavior.
 
-**Deliverable:** Automatic, benchmarked routing decision — no manual
-threshold tuning needed by user.
+**Deliverable:** automatic routing with no manual threshold for the user
+to tune — verified via `test_gil_releasing_func_actually_runs_on_multiple_threads`
+and friends that the race genuinely engages threading only when it helps.
 
-### P4 — String Ops Fast Path (week 6) — Planned
-- `regex` crate for `.str.contains`, `.upper`, `.lower`, `.strip`,
-  `.replace` whitelisted patterns
-- Extend dispatch heuristic to string dtype detection
-- Tests: string equivalence, unicode edge cases, mixed-type Series fallback
+### P4 — String Ops Fast Path (week 6) — Done, with a real caveat
+- Different mechanism than the numeric affine trick, deliberately: a
+  lambda like `s.replace("a", "b")` can't be reverse-engineered from
+  probe points the way an affine transform's two coefficients can (that
+  trick relies on affine functions being fully determined by exactly two
+  points — string ops have no equivalent closed form). So:
+  - `decide_str.py`: a strict identity whitelist for the no-argument
+    methods reachable through `.turboply(func)` — `str.upper`,
+    `str.lower`, `str.strip`. `func is str.upper` is a safe, zero-risk
+    match (the exact operation, not an inference).
+  - `str_accessor.py`: a `.turboply.str` sub-accessor mirroring pandas'
+    own `.str`, for `.contains(pattern)` / `.replace(pattern, repl)` —
+    called directly instead of inferred from a lambda, backed by Rust's
+    `regex` crate.
+  - Both funnel through `decide_str.verified_native()`, which — same
+    safety net as everywhere else — verifies native output against real
+    Python output on a sample before trusting it on the full Series, so
+    a Rust `regex` crate incompatibility (e.g. no backreference support,
+    unlike Python's `re`) safely falls back rather than mismatching.
+- **The real finding**: benchmarked all four ops from 500 to 1,000,000
+  rows, the native string path is consistently ~0.6–0.8x plain pandas —
+  never faster, at any scale tested. Unlike the numeric/row-wise paths'
+  genuine zero-copy numpy views, string data has to be copied into owned
+  Rust `String`s on the way in and new Python `str` objects on the way
+  out (plus constructing the result `pd.Series`), and that round-trip
+  costs more than CPython's already-fast built-in string methods save.
+  Two real fixes were applied along the way (explicit `dtype=` on the
+  result Series — pandas 3.x infers its own `StringDtype`, and
+  constructing without a hint forced an expensive type-inference scan;
+  and reusing one `series.tolist()` pass instead of a second
+  `.to_numpy()` just for the verification sample) — both were genuine
+  wins but not enough to flip the ratio, which held flat across the
+  entire scale range rather than approaching parity at any point tested.
+  So `engine="auto"` deliberately never picks this tier — "auto" promises
+  "never worse than plain pandas, sometimes better", and this is a tier
+  proven to only ever be worse. It's reachable via `engine="native"` (an
+  explicit override — correctness-verified as always, no performance
+  promise) or `.turboply.str.contains()`/`.replace()` directly.
+- Tests (`tests/test_decide_str.py`): equivalence including Unicode,
+  identity-only matching (a lambda wrapping `str.upper` isn't matched,
+  only `func is str.upper` itself), null/mixed-type Series decline
+  correctly, backreference-pattern fallback, and
+  `test_auto_engine_never_uses_string_native_path` pinning the core
+  finding down as a regression test.
 
-**Deliverable:** Common string apply patterns accelerated.
+**Deliverable:** correct, tested, and available — but not a performance
+recommendation the way the numeric/row-wise fast paths are. Improving the
+underlying marshaling (e.g. borrowed `&str` views instead of owned
+`String`s on the input side) is a real follow-up, not attempted here
+given the output side's allocation is unavoidable regardless and looked
+unlikely to close the whole gap on its own.
 
-### P5 — DataFrame Row-wise (axis=1) Support (weeks 7–8) — Planned
-- Struct-of-arrays marshaling: convert DataFrame rows into
-  columnar buffers for the native path
-- Support row-wise whitelisted ops (e.g., `row['a'] + row['b']`)
-- Fallback to parallel Python callback for arbitrary row functions
-- Tests: axis=1 equivalence across dtypes, mixed-column DataFrames
+### P5 — DataFrame Row-wise (axis=1) Support (weeks 7–8) — Done
+- `decide_row.py`: the univariate affine trick generalizes cleanly to
+  row-wise functions. A row-wise callable takes a whole row (an N-column
+  Series) rather than a scalar, so instead of probing at `x=0`/`x=1`,
+  probe at the all-zero row (gives the intercept) and at each unit-basis
+  row — exactly one column set to 1, the rest 0 (each gives intercept +
+  that column's coefficient). N+1 points fully determine an N-variable
+  affine function the same way two points determine a one-variable one;
+  `row['a'] + row['b']` is exactly this shape with coefficients (1, 1).
+- `row_affine_f64` (Rust): struct-of-arrays layout — one 1-D array per
+  column rather than an array-of-rows, so each column stays a
+  contiguous, zero-copy view into its original numpy buffer, same
+  rationale as the Phase 2 numeric ops.
+- Probing cost is O(total columns), so this caps at `MAX_COLUMNS=20`;
+  wider DataFrames get the Phase 3 parallel fallback instead.
+- **Real bug found via the benchmark, not a code review**: the first
+  version required *every* column in the DataFrame to be numeric, even
+  ones the function never touches — so a DataFrame with a `name` string
+  column alongside numeric ones the row func never referenced would
+  silently decline the fast path entirely, measuring as a false ~1.0x
+  "speedup" in `examples/benchmark.py`. Fixed by only requiring the
+  columns the function's output actually depends on (nonzero probed
+  coefficient) to be numeric — unreferenced columns' dtypes are now
+  irrelevant, exactly the shape that showed up in the benchmark.
+- Only covers row-wise (`axis=1`); `axis=0` (column-wise) has no native
+  path and always gets the Phase 3 parallel tier or plain pandas instead.
+- Tests (`tests/test_decide_row.py`): equivalence across int/float/mixed
+  columns, dtype preservation, the unreferenced-non-numeric-column fix
+  specifically, wide-DataFrame column cap, `axis=0` never engaging, and
+  mock-verified proof the native call is genuinely used.
 
-**Deliverable:** `df.turboply.apply(func, axis=1)` accelerated for common
-cases.
+**Deliverable:** verified in `examples/benchmark.py` — `row['a'] +
+row['b']` on 1,000 rows lands consistently around 4–4.5x faster than
+plain `df.apply(..., axis=1)`, which is notoriously slow in vanilla
+pandas (constructs a Series object per row internally).
 
 ### P6 — Polish & UX Parity with Swifter (week 9) — Done*
 - Packaging: wheels for Linux/macOS/Windows via maturin-action — done

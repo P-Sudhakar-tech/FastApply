@@ -124,6 +124,52 @@ fn str_replace(py: Python<'_>, items: Vec<String>, pattern: String, repl: String
     }))
 }
 
+/// Row-wise `sum(coeffs[i] * columns[i][row]) + intercept`, evaluated for
+/// every row. Struct-of-arrays layout: `columns` is one 1-D array per
+/// DataFrame column rather than an array-of-rows, so each column stays a
+/// contiguous, zero-copy view into the original numpy backing array.
+/// Backs the DataFrame row-wise fast path (decide_row.py): a row-wise
+/// callable that turns out to be a linear combination of columns (e.g.
+/// `row['a'] + row['b']`) is a straight generalization of the univariate
+/// affine transform in [`affine_f64`] — same rationale for the
+/// sequential/parallel split.
+#[pyfunction]
+fn row_affine_f64<'py>(
+    py: Python<'py>,
+    columns: Vec<PyReadonlyArray1<'py, f64>>,
+    coeffs: Vec<f64>,
+    intercept: f64,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    if columns.len() != coeffs.len() {
+        return Err(PyValueError::new_err("columns and coeffs must be the same length"));
+    }
+    let slices: Vec<&[f64]> = columns
+        .iter()
+        .map(|c| c.as_slice().map_err(|e| PyValueError::new_err(e.to_string())))
+        .collect::<PyResult<Vec<_>>>()?;
+    let n = slices.first().map(|s| s.len()).unwrap_or(0);
+    for s in &slices {
+        if s.len() != n {
+            return Err(PyValueError::new_err("all columns must be the same length"));
+        }
+    }
+
+    let out: Vec<f64> = py.allow_threads(|| {
+        let compute = |i: usize| -> f64 {
+            slices
+                .iter()
+                .zip(coeffs.iter())
+                .fold(intercept, |acc, (col, &c)| acc + c * col[i])
+        };
+        if n >= PARALLEL_THRESHOLD {
+            (0..n).into_par_iter().map(compute).collect()
+        } else {
+            (0..n).map(compute).collect()
+        }
+    });
+    Ok(out.into_pyarray_bound(py))
+}
+
 #[pymodule]
 fn _turboply(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dummy_add, m)?)?;
@@ -136,5 +182,6 @@ fn _turboply(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(str_strip, m)?)?;
     m.add_function(wrap_pyfunction!(str_contains, m)?)?;
     m.add_function(wrap_pyfunction!(str_replace, m)?)?;
+    m.add_function(wrap_pyfunction!(row_affine_f64, m)?)?;
     Ok(())
 }

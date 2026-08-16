@@ -2,12 +2,28 @@
 
     .venv/Scripts/python.exe examples/benchmark.py
 
-As of Phase 2 (see claude.md), the numeric-transform case below is routed
-through the native affine fast path (decide.py + Rust affine_i64/f64,
-abs_i64/f64) whenever the callable can be verified as a linear/abs
-transform on a numeric Series of at least decide.MIN_ROWS rows; the string
-and row-wise DataFrame cases are still Phase 1's plain pandas fallback
-(Phases 4/5).
+Two cases below are routed through a genuine native fast path under the
+default engine="auto":
+  - numeric transform -> decide.py + Rust affine_i64/f64, abs_i64/f64 (P2)
+  - row['a'] + row['b'] -> decide_row.py + Rust row_affine_f64, the
+    multivariate generalization of the same affine trick (P5)
+
+A third case, str.upper (P4, decide_str.py + Rust str_upper — an
+identity-whitelist match verified against a sample), is included too,
+run two ways: under the default engine="auto" (falls back to plain
+pandas — matches it, no speedup expected) and forced via engine="native"
+(shows the actual native-path numbers). This isn't an oversight: string
+data has to be copied into owned Rust Strings on the way in and new
+Python str objects on the way out, unlike the numeric/row-wise paths'
+genuine zero-copy numpy views, and that round-trip was benchmarked
+(500 to 1,000,000 rows, this repo's git history) to consistently cost
+more than it saves. So "auto" deliberately never picks it — see
+accessor.py's module docstring and claude.md for the full writeup. The
+numbers below demonstrate exactly that, rather than asserting it.
+
+Arbitrary callables that don't match a native pattern get a
+sampling-based threaded fallback (P3) instead of a straight serial loop,
+when a sample measurement shows it's actually faster.
 
 `s.turboply(func)` is the primary API (the accessor is directly callable);
 `.apply()` still works as an alias.
@@ -58,7 +74,7 @@ def main():
     df = pd.DataFrame(
         {
             "a": rng.integers(0, 1000, size=N_ROWS),
-            "b": rng.normal(size=N_ROWS),
+            "b": rng.integers(0, 1000, size=N_ROWS),
             "name": [f"item_{i}" for i in range(N_ROWS)],
         }
     )
@@ -72,22 +88,30 @@ def main():
         timed(lambda: numbers.turboply(lambda x: x * 2 + 1)),
     )
 
-    names = df["name"]
     report(
-        "Series string transform: str.upper  [Phase 4, still fallback]",
-        timed(lambda: names.apply(str.upper)),
-        timed(lambda: names.turboply(str.upper)),
-    )
-
-    report(
-        "DataFrame row-wise apply, axis=1  [Phase 5, still fallback]",
+        "DataFrame row-wise apply, axis=1: row['a'] + row['b']  [native fast path, Phase 5]",
         timed(lambda: df.apply(lambda row: row["a"] + row["b"], axis=1)),
         timed(lambda: df.turboply(lambda row: row["a"] + row["b"], axis=1)),
     )
 
+    names = df["name"]
+    report(
+        "Series string transform: str.upper, engine='auto'  [never native, by design]",
+        timed(lambda: names.apply(str.upper)),
+        timed(lambda: names.turboply(str.upper)),
+    )
+    report(
+        "Series string transform: str.upper, engine='native'  [forced, see caveat above]",
+        timed(lambda: names.apply(str.upper)),
+        timed(lambda: names.turboply(str.upper, engine="native")),
+    )
+
     print(
-        "Only the numeric-transform case is accelerated today. String ops and\n"
-        "row-wise DataFrame apply are unchanged pandas fallback until Phases 4/5."
+        "Numeric and row-wise cases get a genuine native speedup under the\n"
+        "default engine='auto'. The string case is included specifically to\n"
+        "show why it doesn't: 'auto' matches plain pandas exactly (correct\n"
+        "fallback, no regression), while forcing engine='native' shows the\n"
+        "measured slowdown that 'auto' avoids picking automatically."
     )
 
 
