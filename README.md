@@ -54,3 +54,34 @@ s.turboply(lambda x: x * 2)   # identical result to s.apply(lambda x: x * 2)
 df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
 df.turboply(lambda row: row["a"] + row["b"], axis=1)
 ```
+
+### Options
+
+```python
+s.turboply(func, engine="auto")     # default: try the native fast path, fall back silently
+s.turboply(func, engine="pandas")   # always plain pandas .apply(), skips the eligibility check
+s.turboply(func, engine="native")   # require the fast path; raises ValueError with the
+                                     # specific reason if func isn't eligible, instead of
+                                     # silently falling back
+
+s.turboply(func, verbose=True)      # prints which engine was used and why, to stderr
+
+s.turboply(func, progress_bar=True) # progress bar for the pandas-fallback path only —
+                                     # the native path is one vectorized call, nothing to
+                                     # report progress on there
+```
+
+## Benchmarks
+
+`examples/benchmark.py` compares plain `pandas.apply()` against `.turboply()`
+on 1,000 rows (median of 50 runs, 5 warmup): the numeric-transform case
+(`x * 2 + 1`) lands at **~1.9–2x**, since it's eligible for the native fast
+path; string ops and row-wise `DataFrame.apply` are unchanged pandas fallback
+(that's Phases 4/5, not yet built).
+
+`examples/benchmark_vs_swifter.py` adds a comparison against
+[swifter](https://github.com/jmcarpenter2/swifter)'s `.apply()`. It's a
+separate opt-in script (not a `turboply` dependency) since swifter pulls in
+dask, tqdm, etc. As of this writing swifter 1.4.0 doesn't run cleanly against
+recent pandas/Python — see that script's error message for the specific
+compatibility gap if you hit it.

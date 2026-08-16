@@ -78,8 +78,15 @@ cibuildwheel config layer on top.
 | P3    | Sampling-Based Smart Dispatch      | Next    |
 | P4    | String Ops Fast Path               | Planned |
 | P5    | DataFrame Row-wise (axis=1)        | Planned |
-| P6    | Polish & UX Parity with Swifter    | Planned |
+| P6    | Polish & UX Parity with Swifter    | Done*   |
 | P7    | Benchmarking & Hardening           | Planned |
+
+\* P6: engine selection, verbose routing explanations, progress bar, and
+wheel packaging are all done — see "Polish & UX" and "Publishing" below.
+The one open item is live benchmark numbers against swifter: swifter
+1.4.0 doesn't run cleanly against this repo's pandas/Python versions (a
+swifter/dask compatibility gap, not a turboply issue) — see
+`examples/benchmark_vs_swifter.py`'s error message for specifics.
 
 ## Flow
 
@@ -102,9 +109,9 @@ flowchart TD
     classDef done fill:#dde9e0,stroke:#3f7d5c,color:#1b1b1b;
     classDef next fill:#f0dcd0,stroke:#b8441f,color:#1b1b1b;
     classDef planned fill:#eae5db,stroke:#9c9284,color:#1b1b1b;
-    class P0,P1,P2 done;
+    class P0,P1,P2,P6 done;
     class P3 next;
-    class P4,P5,P6,P7 planned;
+    class P4,P5,P7 planned;
 ```
 
 ## Phase details
@@ -198,21 +205,37 @@ threshold tuning needed by user.
 **Deliverable:** `df.turboply.apply(func, axis=1)` accelerated for common
 cases.
 
-### P6 — Polish & UX Parity with Swifter (week 9) — Packaging done, rest planned
-- ~~Packaging: wheels for Linux/macOS/Windows via maturin~~ — done ahead of
-  schedule (`.github/workflows/release.yml` + Trusted Publishing to
-  TestPyPI/PyPI), since a near-term publish date pulled it forward. See
+### P6 — Polish & UX Parity with Swifter (week 9) — Done*
+- Packaging: wheels for Linux/macOS/Windows via maturin-action — done
+  ahead of schedule (`.github/workflows/release.yml` + Trusted Publishing
+  to TestPyPI/PyPI), since a near-term publish date pulled it forward. See
   "Publishing" above.
-- Optional `progress_bar=True` — not started
-- Config: force native / force pandas / verbose mode explaining routing
-  decision — not started
-- Docs + README with benchmarks vs plain `.apply()` and vs swifter — not
-  started beyond what's in `examples/benchmark.py`
+- `progress_bar=True` (`progress.py`) — reports progress for the pandas
+  fallback path via a dependency-free `\r`-updating bar to stderr. Native
+  path is a single vectorized call, so there's nothing to report progress
+  on there — requesting it is a silent no-op in that case.
+- Config: `engine="auto"|"native"|"pandas"` + `verbose=True`
+  (`accessor.py`) — `"native"` raises `ValueError` with the specific
+  ineligibility reason instead of silently falling back;
+  `decide.decide()` returns a single `Decision(result, engine, reason)`
+  so verbose logging doesn't re-run the probe-and-sample check a second
+  time.
+- Docs + README with benchmarks vs plain `.apply()` — done
+  (`examples/benchmark.py`). Vs swifter — script exists
+  (`examples/benchmark_vs_swifter.py`) but swifter 1.4.0 doesn't run
+  cleanly against this repo's pandas 3.x / Python 3.11, so live numbers
+  aren't captured; see \* above.
+- Tests (`tests/test_polish.py`): engine="pandas" skips the fast path
+  entirely (verified via monkeypatch, not just output), engine="native"
+  succeeds when eligible and raises with a specific reason on every
+  ineligibility case (non-affine func, too-small Series, DataFrame, extra
+  args), verbose output content, progress bar output and its correct
+  silence on the native path
 
 **Deliverable:** PyPI-publishable v0.1.0 release. Publishable today in the
-sense that CI can build and ship wheels; the UX-polish items above are
-still open, so an initial release would be an early/alpha cut rather than
-a fully-polished v0.1.0.
+sense that CI can build and ship wheels with real UX polish behind them;
+the one gap is verified swifter benchmark numbers (external compatibility
+issue, not a turboply gap).
 
 ### P7 — Benchmarking & Hardening (week 10) — Planned
 - `criterion` benchmarks + `pytest-benchmark`

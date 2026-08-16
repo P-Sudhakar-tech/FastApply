@@ -1,0 +1,124 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+import turboply  # noqa: F401  (registers the .turboply accessor)
+
+LARGE_N = 1000
+
+
+def _large_int_series():
+    return pd.Series(np.arange(LARGE_N, dtype="int64"))
+
+
+# --- engine="pandas" ---------------------------------------------------
+
+
+def test_engine_pandas_skips_fast_path():
+    s = _large_int_series()
+    expected = s.apply(lambda x: x * 2 + 1)
+    result = s.turboply(lambda x: x * 2 + 1, engine="pandas")
+    pd.testing.assert_series_equal(result, expected)
+
+
+def test_engine_pandas_never_calls_native(monkeypatch):
+    s = _large_int_series()
+    from turboply import decide
+
+    monkeypatch.setattr(decide, "decide", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not be called")))
+    result = s.turboply(lambda x: x * 2 + 1, engine="pandas")
+    pd.testing.assert_series_equal(result, s.apply(lambda x: x * 2 + 1))
+
+
+# --- engine="native" -----------------------------------------------------
+
+
+def test_engine_native_succeeds_when_eligible():
+    s = _large_int_series()
+    expected = s.apply(lambda x: x * 2 + 1)
+    result = s.turboply(lambda x: x * 2 + 1, engine="native")
+    pd.testing.assert_series_equal(result, expected)
+
+
+def test_engine_native_raises_when_not_eligible_non_affine():
+    s = _large_int_series()
+    with pytest.raises(ValueError, match="not eligible"):
+        s.turboply(lambda x: x**2, engine="native")
+
+
+def test_engine_native_raises_when_series_too_small():
+    s = pd.Series(range(10))
+    with pytest.raises(ValueError, match="not eligible"):
+        s.turboply(lambda x: x * 2, engine="native")
+
+
+def test_engine_native_raises_on_dataframe():
+    df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+    with pytest.raises(ValueError, match="not eligible"):
+        df.turboply(lambda row: row["a"] + row["b"], axis=1, engine="native")
+
+
+def test_engine_native_raises_with_extra_args():
+    s = _large_int_series()
+    with pytest.raises(ValueError, match="not eligible"):
+        s.turboply(lambda x, y: x + y, args=(1,), engine="native")
+
+
+def test_invalid_engine_raises():
+    s = pd.Series([1, 2, 3])
+    with pytest.raises(ValueError, match="engine"):
+        s.turboply(lambda x: x, engine="bogus")
+
+
+# --- verbose -------------------------------------------------------------
+
+
+def test_verbose_reports_native_engine(capsys):
+    s = _large_int_series()
+    s.turboply(lambda x: x * 2 + 1, verbose=True)
+    err = capsys.readouterr().err
+    assert "engine=native-int64" in err
+
+
+def test_verbose_reports_pandas_fallback_reason(capsys):
+    s = _large_int_series()
+    s.turboply(lambda x: x**2, verbose=True)
+    err = capsys.readouterr().err
+    assert "engine=pandas" in err
+    assert "affine" in err
+
+
+def test_verbose_silent_by_default(capsys):
+    s = _large_int_series()
+    s.turboply(lambda x: x * 2 + 1)
+    err = capsys.readouterr().err
+    assert err == ""
+
+
+# --- progress_bar ----------------------------------------------------------
+
+
+def test_progress_bar_prints_for_fallback_path(capsys):
+    s = pd.Series(range(200))
+    result = s.turboply(lambda x: x**2, progress_bar=True)
+    pd.testing.assert_series_equal(result, s.apply(lambda x: x**2))
+    err = capsys.readouterr().err
+    assert "turboply [" in err
+    assert "200/200" in err
+
+
+def test_progress_bar_silent_when_native_path_used(capsys):
+    """The native path is one vectorized call - nothing to report progress
+    on, so no progress bar should print even if requested."""
+    s = _large_int_series()
+    s.turboply(lambda x: x * 2 + 1, progress_bar=True)
+    err = capsys.readouterr().err
+    assert err == ""
+
+
+def test_progress_bar_on_dataframe_row_apply(capsys):
+    df = pd.DataFrame({"a": range(150), "b": range(150)})
+    result = df.turboply(lambda row: row["a"] + row["b"], axis=1, progress_bar=True)
+    pd.testing.assert_series_equal(result, df.apply(lambda row: row["a"] + row["b"], axis=1))
+    err = capsys.readouterr().err
+    assert "150/150" in err

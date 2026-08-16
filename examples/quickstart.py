@@ -9,6 +9,13 @@ Every check prints PASS/FAIL and compares against plain pandas .apply() so
 you can see for yourself that `s.turboply(func)` — the primary API, the
 accessor is directly callable — is a correctness-safe drop-in replacement.
 `.turboply.apply(func)` still works too, as an alias.
+
+Also demonstrates the engine/verbose/progress_bar options: engine="pandas"
+forces the fallback, engine="native" requires the fast path and raises
+with a specific reason if the callable isn't eligible, verbose=True prints
+the routing decision, and progress_bar=True reports progress for the
+pandas fallback path (the native path is a single vectorized call, so
+there's nothing to report progress on there).
 """
 
 import pandas as pd
@@ -89,6 +96,33 @@ def main():
             s.turboply(lambda x: x * 2),
         )
     )
+
+    # 8. engine="pandas" forces the fallback path even when eligible.
+    large = pd.Series(range(100))
+    results.append(
+        check(
+            "engine='pandas' matches plain pandas",
+            large.turboply(lambda x: x * 2, engine="pandas"),
+            large.apply(lambda x: x * 2),
+        )
+    )
+
+    # 9. engine="native" raises with a clear reason instead of silently
+    #    falling back, when the callable isn't fast-path eligible.
+    try:
+        large.turboply(lambda x: x**2, engine="native")
+        results.append(check("engine='native' raises on ineligible func", False, True))
+    except ValueError as exc:
+        results.append(check(f"engine='native' raises: {exc}", True, True))
+
+    # 10. verbose=True explains the routing decision (see stderr).
+    print("\n[verbose demo - routing explanation printed to stderr below]")
+    large.turboply(lambda x: x * 2 + 1, verbose=True)
+
+    # 11. progress_bar=True reports progress for the pandas fallback path.
+    print("\n[progress_bar demo - bar printed to stderr below]")
+    large.turboply(lambda x: x**2, progress_bar=True)
+    print()
 
     passed = sum(results)
     print(f"\n{passed}/{len(results)} checks passed")

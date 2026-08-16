@@ -13,7 +13,15 @@ whenever the detected coefficients are themselves whole numbers, so the
 common case (`x * 2 + 1` on an int column) never pays for a float64
 round-trip: no cast of the full array to float, and no rounding pass
 afterwards to restore the dtype.
+
+`decide()` is the single entry point — it runs the probe-and-verify logic
+exactly once and returns a `Decision` carrying the result (or None),
+which engine was used, and a human-readable reason. `verbose=True` and
+`engine="native"` on the accessor both read off that one `Decision`
+rather than re-running the (cheap, but not free) probing a second time.
 """
+
+from collections import namedtuple
 
 import numpy as np
 import pandas as pd
@@ -23,6 +31,8 @@ from . import _turboply
 MIN_ROWS = 50
 SAMPLE_SIZE = 12
 _TOL = 1e-9
+
+Decision = namedtuple("Decision", ["result", "engine", "reason"])
 
 
 def _is_real_number(value):
@@ -63,40 +73,54 @@ def _restore_dtype(out, series):
     return result
 
 
-def try_numeric_fast_path(series, func):
-    """Return an accelerated result equivalent to series.apply(func), or
-    None if func can't be verified as a supported whitelisted pattern."""
-    if len(series) < MIN_ROWS or not pd.api.types.is_numeric_dtype(series.dtype):
-        return None
+def decide(series, func):
+    """Run the fast-path eligibility check once and return a Decision."""
+    if len(series) < MIN_ROWS:
+        return Decision(None, "pandas", f"series has {len(series)} rows, needs >= {MIN_ROWS}")
+    if not pd.api.types.is_numeric_dtype(series.dtype):
+        return Decision(None, "pandas", f"dtype {series.dtype} is not numeric")
 
     is_int_series = pd.api.types.is_integer_dtype(series.dtype)
     sample = _sample(series)
     if len(sample) == 0 or np.any(np.isnan(sample)):
-        return None
+        return Decision(None, "pandas", "sample contains NaN, can't safely verify")
 
     if func is abs:
         if is_int_series:
             arr = series.to_numpy().astype(np.int64, copy=False)
             out = _turboply.abs_i64(arr)
+            engine = "native-int64"
         else:
             out = _turboply.abs_f64(series.to_numpy(dtype=float))
-        return pd.Series(out, index=series.index, name=series.name)
+            engine = "native-float64"
+        result = pd.Series(out, index=series.index, name=series.name)
+        return Decision(result, engine, "abs() built-in, always exact")
 
     try:
         f0, f1 = func(0.0), func(1.0)
-    except Exception:
-        return None
+    except Exception as exc:
+        return Decision(None, "pandas", f"function raised on probe inputs (0.0, 1.0): {exc!r}")
     if not (_is_real_number(f0) and _is_real_number(f1)):
-        return None
+        return Decision(None, "pandas", "function output at probe points isn't a real number")
 
     a, b = f1 - f0, f0
     if not _matches_on_sample(func, lambda x: a * x + b, sample):
-        return None
+        return Decision(
+            None, "pandas", "function isn't affine on a sample of the real data (branches, x**2, ...)"
+        )
 
     if is_int_series and _is_whole(a) and _is_whole(b):
         arr = series.to_numpy().astype(np.int64, copy=False)
         out = _turboply.affine_i64(arr, int(round(a)), int(round(b)))
-        return pd.Series(out, index=series.index, name=series.name)
+        result = pd.Series(out, index=series.index, name=series.name)
+        return Decision(result, "native-int64", f"affine transform a*x+b, a={a:g}, b={b:g}")
 
     out = _turboply.affine_f64(series.to_numpy(dtype=float), a, b)
-    return _restore_dtype(out, series)
+    result = _restore_dtype(out, series)
+    return Decision(result, "native-float64", f"affine transform a*x+b, a={a:g}, b={b:g}")
+
+
+def try_numeric_fast_path(series, func):
+    """Return an accelerated result equivalent to series.apply(func), or
+    None if func can't be verified as a supported whitelisted pattern."""
+    return decide(series, func).result
