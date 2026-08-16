@@ -31,6 +31,43 @@ venv's site-packages pointing at `python/` — the same end result as
 `maturin develop` works there unaffected. Prefer `maturin develop --release`
 first; fall back to `build.ps1` only if it fails to launch.
 
+## Publishing
+
+Wheels are built for Linux (manylinux 2_28, x86_64), Windows (win_amd64),
+and macOS (universal2: x86_64 + arm64) via `PyO3/maturin-action` in
+`.github/workflows/release.yml`, plus an sdist. Publishing uses PyPI's
+Trusted Publishing (OIDC) — no API tokens stored as secrets.
+
+**One-time setup (do this before the first release):**
+1. In the GitHub repo settings, create two environments: `testpypi` and
+   `pypi` (Settings → Environments). Consider adding a required reviewer
+   on `pypi` as an extra manual gate beyond the workflow_dispatch trigger.
+2. On [test.pypi.org](https://test.pypi.org) and
+   [pypi.org](https://pypi.org), add a trusted publisher for the
+   `turboply` project (or pending publisher, if the project doesn't exist
+   there yet): owner `P-Sudhakar-tech`, repo `FastApply`, workflow
+   `release.yml`, environment name matching (`testpypi` / `pypi`
+   respectively).
+
+**Cutting a release:**
+1. `git tag v0.1.0 && git push origin v0.1.0` — this builds everything and
+   auto-publishes to **TestPyPI**. The version in `Cargo.toml` /
+   `pyproject.toml` is overwritten from the tag at build time, so there's
+   no separate version-bump commit needed.
+2. Install from TestPyPI somewhere clean and sanity-check it:
+   `pip install --index-url https://test.pypi.org/simple/
+   --extra-index-url https://pypi.org/simple/ turboply==0.1.0`
+   (the `--extra-index-url` is needed so pandas/numpy resolve from real
+   PyPI, since TestPyPI doesn't mirror them).
+3. Once confirmed, go to Actions → Release → Run workflow, pick the same
+   tag, set `publish_target: pypi`. This rebuilds from that tag and
+   publishes to the real PyPI — never automatic on tag push.
+
+Phase 6 originally scoped `cibuildwheel`; `maturin-action` was used instead
+since it's purpose-built for maturin/PyO3 projects and handles the
+manylinux container + cross-compilation directly, without a raw
+cibuildwheel config layer on top.
+
 ## Status
 
 | Phase | Name                              | Status  |
@@ -161,14 +198,21 @@ threshold tuning needed by user.
 **Deliverable:** `df.turboply.apply(func, axis=1)` accelerated for common
 cases.
 
-### P6 — Polish & UX Parity with Swifter (week 9) — Planned
-- Optional `progress_bar=True`
+### P6 — Polish & UX Parity with Swifter (week 9) — Packaging done, rest planned
+- ~~Packaging: wheels for Linux/macOS/Windows via maturin~~ — done ahead of
+  schedule (`.github/workflows/release.yml` + Trusted Publishing to
+  TestPyPI/PyPI), since a near-term publish date pulled it forward. See
+  "Publishing" above.
+- Optional `progress_bar=True` — not started
 - Config: force native / force pandas / verbose mode explaining routing
-  decision
-- Docs + README with benchmarks vs plain `.apply()` and vs swifter
-- Packaging: wheels for Linux/macOS/Windows via maturin + cibuildwheel
+  decision — not started
+- Docs + README with benchmarks vs plain `.apply()` and vs swifter — not
+  started beyond what's in `examples/benchmark.py`
 
-**Deliverable:** PyPI-publishable v0.1.0 release.
+**Deliverable:** PyPI-publishable v0.1.0 release. Publishable today in the
+sense that CI can build and ship wheels; the UX-polish items above are
+still open, so an initial release would be an early/alpha cut rather than
+a fully-polished v0.1.0.
 
 ### P7 — Benchmarking & Hardening (week 10) — Planned
 - `criterion` benchmarks + `pytest-benchmark`

@@ -8,13 +8,28 @@ version = "0.1.0"
 description = "A drop-in, accelerated replacement for pandas .apply()"
 readme = "README.md"
 requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Ponugoti Sudhakar", email = "ponugotisudhakar3@gmail.com" }]
+keywords = ["pandas", "apply", "performance", "dataframe", "accelerated"]
 dependencies = [
     "pandas>=1.5",
     "numpy>=1.23",
 ]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
 ]
+
+[project.urls]
+Homepage = "https://github.com/P-Sudhakar-tech/FastApply"
+Repository = "https://github.com/P-Sudhakar-tech/FastApply"
 
 [project.optional-dependencies]
 test = ["pytest>=7.0"]

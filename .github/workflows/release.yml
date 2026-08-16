@@ -1,0 +1,140 @@
+name: Release
+
+# Push a tag like v0.1.0 to build wheels + sdist and publish to TestPyPI
+# automatically. Once you've verified the TestPyPI install works, promote
+# the same tag to the real PyPI by re-running this workflow manually
+# (Actions tab -> Release -> Run workflow) with publish_target: pypi.
+#
+# One-time setup required before this can publish anything (see claude.md
+# "Publishing" section): create `testpypi` and `pypi` environments in repo
+# Settings -> Environments, and register this workflow as a trusted
+# publisher on test.pypi.org and pypi.org for the `turboply` project.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      publish_target:
+        description: "Where to publish"
+        type: choice
+        required: true
+        default: testpypi
+        options:
+          - testpypi
+          - pypi
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  sdist:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set package version from tag
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${{ needs.version.outputs.version }}\"/" Cargo.toml pyproject.toml
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set package version from tag
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${{ needs.version.outputs.version }}\"/" Cargo.toml pyproject.toml
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+          manylinux: 2_28
+          target: x86_64-unknown-linux-gnu
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux
+          path: dist
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set package version from tag
+        shell: bash
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${{ needs.version.outputs.version }}\"/" Cargo.toml pyproject.toml
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+          target: x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows
+          path: dist
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set package version from tag
+        run: |
+          sed -i '' "s/^version = \".*\"/version = \"${{ needs.version.outputs.version }}\"/" Cargo.toml pyproject.toml
+      - name: Build universal2 wheel (x86_64 + arm64)
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+          target: universal2-apple-darwin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos
+          path: dist
+
+  publish:
+    needs: [sdist, linux, windows, macos]
+    runs-on: ubuntu-latest
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_target == 'pypi') && 'pypi' || 'testpypi' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to TestPyPI
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish_target == 'pypi') }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+          skip-existing: true
+
+      - name: Publish to PyPI
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_target == 'pypi' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
