@@ -108,3 +108,30 @@ def test_string_series_never_engages_numeric_fast_path():
     s = pd.Series([f"item_{i}" for i in range(LARGE_N)])
     assert decide.try_numeric_fast_path(s, str.upper) is None
     pd.testing.assert_series_equal(s.turboply.apply(str.upper), s.apply(str.upper))
+
+
+def test_nan_outside_sample_does_not_silently_corrupt_result():
+    """Regression test for a real bug (found via P7 hardening, not code
+    review): the verification sample only covers ~12 stride-spaced
+    positions, so a NaN elsewhere in the Series would previously pass
+    verification undetected, and the native path would then apply the
+    naive a*x+b formula to that NaN — silently wrong whenever the real
+    function has explicit NaN-handling logic the sample never exercised.
+    """
+    vals = [1.0] * LARGE_N
+    vals[40] = float("nan")  # off the sampling stride for a 1000-row Series
+    s = pd.Series(vals)
+
+    def func(x):
+        return 0.0 if np.isnan(x) else x * 2 + 1
+
+    assert decide.try_numeric_fast_path(s, func) is None
+    pd.testing.assert_series_equal(s.turboply(func), s.apply(func))
+
+
+def test_inf_handled_correctly_via_fallback_or_native():
+    s = pd.Series([1.0, float("inf"), float("-inf")] + list(range(LARGE_N)))
+    func = lambda x: x * 2 + 1  # noqa: E731
+    expected = s.apply(func)
+    result = s.turboply(func)
+    pd.testing.assert_series_equal(result, expected)

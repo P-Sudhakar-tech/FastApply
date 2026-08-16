@@ -153,3 +153,77 @@ def test_verbose_reports_native_row_engine(capsys):
     df.turboply(lambda row: row["a"] + row["b"], axis=1, verbose=True)
     err = capsys.readouterr().err
     assert "engine=native-row-affine" in err
+
+
+# --- edge cases (Phase 7 hardening) -----------------------------------------
+
+
+def test_nan_in_used_column_outside_sample_does_not_silently_corrupt_result():
+    """Same class of bug as decide.py's equivalent test: a NaN in a
+    column the function depends on, outside the ~12 sampled rows, would
+    previously pass verification undetected and then get the naive
+    linear-combination treatment even when the real function has
+    explicit NaN-handling logic."""
+    a = [float(x) for x in range(LARGE_N)]
+    a[40] = float("nan")  # off the sampling stride
+    df = pd.DataFrame({"a": a, "b": list(range(LARGE_N))})
+
+    def func(row):
+        return -999.0 if np.isnan(row["a"]) else row["a"] + row["b"]
+
+    assert decide_row.decide(df, func).result is None
+    pd.testing.assert_series_equal(df.turboply(func, axis=1), df.apply(func, axis=1))
+
+
+def test_nan_in_unused_column_does_not_block_acceleration():
+    """A NaN in a column the function never references shouldn't disable
+    the fast path — only used columns' NaN-safety matters."""
+    df = pd.DataFrame(
+        {
+            "a": range(LARGE_N),
+            "b": range(LARGE_N),
+            "unused": [float("nan")] * LARGE_N,
+        }
+    )
+    func = lambda row: row["a"] + row["b"]  # noqa: E731
+    decision = decide_row.decide(df, func)
+    assert decision.result is not None
+    pd.testing.assert_series_equal(decision.result, df.apply(func, axis=1))
+
+
+def test_single_row_dataframe_falls_back():
+    df = pd.DataFrame({"a": [1], "b": [2]})
+    func = lambda row: row["a"] + row["b"]  # noqa: E731
+    assert decide_row.decide(df, func).result is None
+    pd.testing.assert_series_equal(df.turboply(func, axis=1), df.apply(func, axis=1))
+
+
+def test_unused_float_column_upcasts_result_to_float_matching_pandas():
+    """pandas' df.apply(axis=1) builds one Series per row spanning ALL
+    columns before func ever runs, so an unused FLOAT column (unlike an
+    unused string column, see the "does not block acceleration" test
+    above) upcasts that row to float64 and therefore the result too —
+    even though the function only touches the int columns. The fast
+    path must reproduce this exactly, not just get the values right."""
+    df = pd.DataFrame(
+        {
+            "a": range(LARGE_N),
+            "b": range(LARGE_N),
+            "unused_float": [1.5] * LARGE_N,
+        }
+    )
+    func = lambda row: row["a"] + row["b"]  # noqa: E731
+    expected = df.apply(func, axis=1)
+    assert expected.dtype == np.float64  # confirms the pandas quirk this test is about
+    decision = decide_row.decide(df, func)
+    assert decision.result is not None
+    pd.testing.assert_series_equal(decision.result, expected)
+
+
+def test_empty_dataframe_falls_back():
+    df = pd.DataFrame({"a": pd.Series(dtype="int64"), "b": pd.Series(dtype="int64")})
+    func = lambda row: row["a"] + row["b"]  # noqa: E731
+    assert decide_row.decide(df, func).result is None
+    result = df.turboply(func, axis=1)
+    expected = df.apply(func, axis=1)
+    assert len(result) == len(expected) == 0

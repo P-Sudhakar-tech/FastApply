@@ -79,11 +79,34 @@ def decide(series, func):
         return Decision(None, "pandas", f"series has {len(series)} rows, needs >= {MIN_ROWS}")
     if not pd.api.types.is_numeric_dtype(series.dtype):
         return Decision(None, "pandas", f"dtype {series.dtype} is not numeric")
+    if pd.api.types.is_bool_dtype(series.dtype):
+        # bool is numeric-ish but not integer-dtype in pandas, and its
+        # apply() dtype inference is genuinely ambiguous for our purposes:
+        # pandas keeps bool dtype only when func is *literally* Python's
+        # identity (returns the same object unchanged), but promotes to
+        # int64 for anything arithmetically equivalent (even `x*1+0`) —
+        # a distinction our affine probing can't observe, since both
+        # produce identical coefficients (a=1, b=0). Declining outright
+        # avoids guessing wrong on a genuine ambiguity rather than
+        # picking a dtype that's sometimes right by chance.
+        return Decision(None, "pandas", "bool dtype not supported (see decide.py for why)")
 
     is_int_series = pd.api.types.is_integer_dtype(series.dtype)
+    # NaN can only occur in float (never plain int64) Series, but must be
+    # checked across the WHOLE series, not just the verification sample:
+    # a guessed affine function is only verified against sampled
+    # positions, so a NaN elsewhere would silently get the naive a*x+b
+    # treatment even if the real function has explicit NaN-handling
+    # logic (branches) that differs — confirmed as a real bug, not a
+    # theoretical one, by a case where func returned 0.0 for NaN input
+    # but the native path returned NaN instead, because the sample
+    # (by chance, given its stride) never landed on the NaN row.
+    if not is_int_series and series.isna().any():
+        return Decision(None, "pandas", "series contains NaN — can't safely trust a sample-only affine guess")
+
     sample = _sample(series)
-    if len(sample) == 0 or np.any(np.isnan(sample)):
-        return Decision(None, "pandas", "sample contains NaN, can't safely verify")
+    if len(sample) == 0:
+        return Decision(None, "pandas", "empty sample")
 
     if func is abs:
         if is_int_series:

@@ -3,15 +3,23 @@
 A drop-in, accelerated replacement for `pandas.apply()`, in the spirit of
 [swifter](https://github.com/jmcarpenter2/swifter).
 
-Status: **Phase 4** — numeric transforms detected as linear/abs (e.g.
-`x * 2 + 1`) and whitelisted string methods (`str.upper`/`.lower`/`.strip`,
-plus `.turboply.str.contains()`/`.replace()`) run through a native fast
-path, ~1.9–2x faster than plain `pandas.apply()` on 1,000 rows
-(`examples/benchmark.py`). Arbitrary callables that don't qualify get a
-sampling-based threaded fallback that only engages when actually measured
-faster (helps I/O-bound work, correctly declines pure-CPU-bound Python).
-Everything else falls back to native `pandas.apply()`, so `.turboply` is
-always correctness-equivalent to it. See `claude.md` for the full roadmap.
+Status: **feature-complete** (all 8 roadmap phases) — numeric transforms
+detected as linear/abs (`x * 2 + 1`) and row-wise DataFrame functions
+that are linear combinations of columns (`row['a'] + row['b']`) run
+through genuine native fast paths, ~1.9–2x and ~4–4.5x faster than plain
+`pandas.apply()` on 1,000 rows respectively (`examples/benchmark.py`).
+Arbitrary callables that don't qualify get a sampling-based threaded
+fallback that only engages when actually measured faster (helps I/O-bound
+work, correctly declines pure-CPU-bound Python). Everything else falls
+back to native `pandas.apply()`, so `.turboply` is always
+correctness-equivalent to it. See `claude.md` for the full roadmap,
+including three real correctness bugs found and fixed during hardening.
+
+String ops (`str.upper`/`.lower`/`.strip`, `.turboply.str.contains()`/
+`.replace()`) are implemented and correct but **not** faster in practice
+— benchmarked from 500 to 1,000,000 rows, consistently ~0.6–0.8x plain
+pandas — so they're excluded from the default `engine="auto"` and only
+reachable via explicit `engine="native"`. See "Options" below.
 
 ## Development
 
@@ -57,15 +65,14 @@ s.turboply(lambda x: x * 2)   # identical result to s.apply(lambda x: x * 2)
 df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
 df.turboply(lambda row: row["a"] + row["b"], axis=1)
 
-# Whitelisted string methods run through the native path too:
+# Whitelisted string methods and regex ops (.turboply.str mirrors
+# pandas' own .str accessor) are implemented and correct, but not
+# faster than plain pandas in practice — see the Status note above.
+# They use plain pandas by default; engine="native" forces the compiled
+# path if you want it anyway:
 names = pd.Series(["  Ada  ", "GRACE", "margaret"] * 50)
-names.turboply(str.upper)
-names.turboply(str.strip)
-
-# Regex-backed ops mirror pandas' own .str accessor (called directly,
-# not inferred from a lambda — see claude.md for why):
+names.turboply(str.upper, engine="native")
 names.turboply.str.contains(r"^GRACE$")
-names.turboply.str.replace(r"\s+", "_")
 ```
 
 ### Options
@@ -88,10 +95,17 @@ s.turboply(func, progress_bar=True) # progress bar for the pandas-fallback path 
 
 `examples/benchmark.py` compares plain `pandas.apply()` against `.turboply()`
 on 1,000 rows (median of 50 runs, 5 warmup): the numeric-transform case
-(`x * 2 + 1`) lands at **~1.9–2x**, since it's eligible for the native fast
-path; row-wise `DataFrame.apply` is unchanged pandas fallback unless a
-threaded-parallel win is measured (Phase 3) — there's no native DataFrame
-fast path yet (that's Phase 5).
+(`x * 2 + 1`) lands at **~1.9–2x** and the row-wise case
+(`row['a'] + row['b']`, notoriously slow in vanilla pandas since it
+constructs a Series per row) at **~4–4.5x**. It also runs the string case
+both ways — default `engine="auto"` (matches plain pandas exactly, no
+native path picked) and forced `engine="native"` — to show directly why
+`"auto"` never picks it.
+
+`cargo bench` (`benches/native_benches.rs`) benchmarks the pure Rust
+compute cores directly (1,000 / 50,000 / 200,000 elements), independent
+of Python/PyO3 marshaling overhead — useful for catching a regression in
+the Rust layer itself.
 
 `examples/benchmark_vs_swifter.py` adds a comparison against
 [swifter](https://github.com/jmcarpenter2/swifter)'s `.apply()`. It's a

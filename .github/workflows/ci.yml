@@ -23,6 +23,10 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Run Rust unit tests (src/core.rs)
+        if: matrix.python-version == '3.11'
+        run: cargo test --release --lib
+
       - name: Create virtual environment
         run: |
           python -m venv .venv

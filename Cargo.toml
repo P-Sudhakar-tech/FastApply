@@ -6,13 +6,24 @@ description = "Accelerated drop-in replacement for pandas .apply()"
 
 [lib]
 name = "_turboply"
-crate-type = ["cdylib"]
+# rlib alongside cdylib so `cargo test`/`cargo bench` can link against the
+# pure compute cores in src/core.rs directly, without needing an embedded
+# Python interpreter (the #[pyfunction] wrappers in lib.rs need a live GIL
+# token and can't be called from a plain Rust test/bench binary).
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module"] }
 rayon = "1.10"
 numpy = "0.22"
 regex = "1.10"
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "native_benches"
+harness = false
 
 [profile.release]
 lto = true

@@ -52,6 +52,25 @@ def _sample_rows(df):
     return df.iloc[::step].iloc[:SAMPLE_SIZE]
 
 
+def _pandas_row_would_be_int(df, used_columns):
+    """Mirror pandas' own df.apply(axis=1) row-construction dtype rule,
+    which depends on ALL columns, not just the ones the function uses:
+    each row is materialized as one pandas Series spanning every column
+    before func ever sees it. If every column is numeric, that row
+    Series is a single homogeneous numeric array — upcast to float64 if
+    ANY column (used or not) is float, even one the function never
+    touches. If any column is non-numeric (e.g. a string id column),
+    the row instead becomes dtype=object, and each column's original
+    scalar type (including int) survives untouched regardless of what
+    other columns hold. Confirmed empirically (not assumed) with cases
+    covering unused float columns, unused string columns, and both
+    together — see tests/test_decide_row.py."""
+    dtypes = df.dtypes
+    if all(pd.api.types.is_numeric_dtype(dt) for dt in dtypes):
+        return all(pd.api.types.is_integer_dtype(dt) for dt in dtypes)
+    return all(pd.api.types.is_integer_dtype(df[col].dtype) for col in used_columns)
+
+
 def decide(df, func):
     """Return a Decision for df.apply(func, axis=1)."""
     if len(df) < MIN_ROWS:
@@ -88,6 +107,13 @@ def decide(df, func):
 
     if not all(pd.api.types.is_numeric_dtype(df[col].dtype) for col in used_columns):
         return Decision(None, "pandas", "a column the function's output actually depends on isn't numeric")
+    # Same reasoning as decide.py's equivalent check: a NaN in a used
+    # column, outside the sampled rows below, would silently get the
+    # naive linear-combination treatment even if func has explicit
+    # NaN-handling logic that differs — checked across the whole column,
+    # not just the sample, for the same reason.
+    if any(df[col].isna().any() for col in used_columns):
+        return Decision(None, "pandas", "a used column contains NaN — can't safely trust a sample-only guess")
 
     sample = _sample_rows(df)
     for _, row in sample.iterrows():
@@ -119,9 +145,8 @@ def decide(df, func):
         out = np.full(len(df), baseline, dtype=float)
 
     result = pd.Series(out, index=df.index)
-    if used_columns and all(pd.api.types.is_integer_dtype(df[col].dtype) for col in used_columns):
-        if np.all(np.isclose(out, np.round(out))):
-            result = result.round().astype("int64")
+    if used_columns and np.all(np.isclose(out, np.round(out))) and _pandas_row_would_be_int(df, used_columns):
+        result = result.round().astype("int64")
 
     coeff_str = ", ".join(f"{c:g}*{col}" for col, c in used) or "constant"
     return Decision(result, "native-row-affine", f"row is {coeff_str} + {baseline:g}, verified on a real sample")

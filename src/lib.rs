@@ -1,12 +1,9 @@
+pub mod core;
+
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use rayon::prelude::*;
 use regex::Regex;
-
-/// Below this length, rayon's work-splitting/join overhead costs more than
-/// a plain sequential loop saves — so we only parallelize past it.
-const PARALLEL_THRESHOLD: usize = 50_000;
 
 /// Trivial native function used to verify the PyO3 build/import path end to end.
 #[pyfunction]
@@ -14,20 +11,10 @@ fn dummy_add(a: i64, b: i64) -> i64 {
     a + b
 }
 
-macro_rules! elementwise {
-    ($slice:expr, $threshold:expr, $f:expr) => {
-        if $slice.len() >= $threshold {
-            $slice.par_iter().map($f).collect()
-        } else {
-            $slice.iter().map($f).collect()
-        }
-    };
-}
-
 /// Elementwise `a * x + b` over a f64 array. Covers add/sub/mul/div-by-scalar
 /// and any composition of them, since all of those reduce to a single affine
 /// transform. GIL is released either way; only arrays past
-/// [`PARALLEL_THRESHOLD`] pay for rayon's parallel dispatch.
+/// [`core::PARALLEL_THRESHOLD`] pay for rayon's parallel dispatch.
 #[pyfunction]
 fn affine_f64<'py>(
     py: Python<'py>,
@@ -36,8 +23,7 @@ fn affine_f64<'py>(
     b: f64,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let slice = arr.as_slice()?;
-    let out: Vec<f64> =
-        py.allow_threads(|| elementwise!(slice, PARALLEL_THRESHOLD, |&x| a * x + b));
+    let out = py.allow_threads(|| core::affine_f64(slice, a, b));
     Ok(out.into_pyarray_bound(py))
 }
 
@@ -53,11 +39,7 @@ fn affine_i64<'py>(
     b: i64,
 ) -> PyResult<Bound<'py, PyArray1<i64>>> {
     let slice = arr.as_slice()?;
-    let out: Vec<i64> = py.allow_threads(|| {
-        elementwise!(slice, PARALLEL_THRESHOLD, |&x| a
-            .wrapping_mul(x)
-            .wrapping_add(b))
-    });
+    let out = py.allow_threads(|| core::affine_i64(slice, a, b));
     Ok(out.into_pyarray_bound(py))
 }
 
@@ -66,7 +48,7 @@ fn affine_i64<'py>(
 #[pyfunction]
 fn abs_f64<'py>(py: Python<'py>, arr: PyReadonlyArray1<'py, f64>) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let slice = arr.as_slice()?;
-    let out: Vec<f64> = py.allow_threads(|| elementwise!(slice, PARALLEL_THRESHOLD, |&x: &f64| x.abs()));
+    let out = py.allow_threads(|| core::abs_f64(slice));
     Ok(out.into_pyarray_bound(py))
 }
 
@@ -74,8 +56,7 @@ fn abs_f64<'py>(py: Python<'py>, arr: PyReadonlyArray1<'py, f64>) -> PyResult<Bo
 #[pyfunction]
 fn abs_i64<'py>(py: Python<'py>, arr: PyReadonlyArray1<'py, i64>) -> PyResult<Bound<'py, PyArray1<i64>>> {
     let slice = arr.as_slice()?;
-    let out: Vec<i64> =
-        py.allow_threads(|| elementwise!(slice, PARALLEL_THRESHOLD, |&x: &i64| x.wrapping_abs()));
+    let out = py.allow_threads(|| core::abs_i64(slice));
     Ok(out.into_pyarray_bound(py))
 }
 
@@ -83,20 +64,20 @@ fn abs_i64<'py>(py: Python<'py>, arr: PyReadonlyArray1<'py, i64>) -> PyResult<Bo
 /// the sequential/parallel threshold rationale.
 #[pyfunction]
 fn str_upper(py: Python<'_>, items: Vec<String>) -> Vec<String> {
-    py.allow_threads(|| elementwise!(items, PARALLEL_THRESHOLD, |s: &String| s.to_uppercase()))
+    py.allow_threads(|| core::str_upper(&items))
 }
 
 /// Elementwise `s.lower()` over a list of strings.
 #[pyfunction]
 fn str_lower(py: Python<'_>, items: Vec<String>) -> Vec<String> {
-    py.allow_threads(|| elementwise!(items, PARALLEL_THRESHOLD, |s: &String| s.to_lowercase()))
+    py.allow_threads(|| core::str_lower(&items))
 }
 
 /// Elementwise `s.strip()` over a list of strings — trims Unicode
 /// whitespace from both ends, same as Rust's `str::trim()`.
 #[pyfunction]
 fn str_strip(py: Python<'_>, items: Vec<String>) -> Vec<String> {
-    py.allow_threads(|| elementwise!(items, PARALLEL_THRESHOLD, |s: &String| s.trim().to_string()))
+    py.allow_threads(|| core::str_strip(&items))
 }
 
 /// Elementwise regex search over a list of strings: does `pattern` match
@@ -104,7 +85,7 @@ fn str_strip(py: Python<'_>, items: Vec<String>) -> Vec<String> {
 #[pyfunction]
 fn str_contains(py: Python<'_>, items: Vec<String>, pattern: String) -> PyResult<Vec<bool>> {
     let re = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(py.allow_threads(|| elementwise!(items, PARALLEL_THRESHOLD, |s: &String| re.is_match(s))))
+    Ok(py.allow_threads(|| core::str_contains(&items, &re)))
 }
 
 /// Elementwise regex replace-all over a list of strings. Backs
@@ -117,11 +98,7 @@ fn str_contains(py: Python<'_>, items: Vec<String>, pattern: String) -> PyResult
 #[pyfunction]
 fn str_replace(py: Python<'_>, items: Vec<String>, pattern: String, repl: String) -> PyResult<Vec<String>> {
     let re = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(py.allow_threads(|| {
-        elementwise!(items, PARALLEL_THRESHOLD, |s: &String| re
-            .replace_all(s, repl.as_str())
-            .into_owned())
-    }))
+    Ok(py.allow_threads(|| core::str_replace(&items, &re, &repl)))
 }
 
 /// Row-wise `sum(coeffs[i] * columns[i][row]) + intercept`, evaluated for
@@ -154,19 +131,7 @@ fn row_affine_f64<'py>(
         }
     }
 
-    let out: Vec<f64> = py.allow_threads(|| {
-        let compute = |i: usize| -> f64 {
-            slices
-                .iter()
-                .zip(coeffs.iter())
-                .fold(intercept, |acc, (col, &c)| acc + c * col[i])
-        };
-        if n >= PARALLEL_THRESHOLD {
-            (0..n).into_par_iter().map(compute).collect()
-        } else {
-            (0..n).map(compute).collect()
-        }
-    });
+    let out = py.allow_threads(|| core::row_affine_f64(&slices, &coeffs, intercept));
     Ok(out.into_pyarray_bound(py))
 }
 

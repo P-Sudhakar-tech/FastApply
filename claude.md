@@ -31,6 +31,15 @@ venv's site-packages pointing at `python/` — the same end result as
 `maturin develop` works there unaffected. Prefer `maturin develop --release`
 first; fall back to `build.ps1` only if it fails to launch.
 
+Separately, `cargo test` / `cargo bench` also can't run locally — they
+pull in dev-dependencies (criterion) that need `windows-sys`, which needs
+`dlltool`, which needs the rest of a full MinGW-w64 binutils install; this
+machine only has rustup's linker-only self-contained subset (see its own
+`GCC-WARNING.txt`: "gcc.exe contained in this folder cannot be used for
+compiling C files - it is only used as a linker"). `cargo build` alone
+works fine (no dev-deps needed), so `./build.ps1` is unaffected. CI runs
+`cargo test --release --lib` on Ubuntu, where this doesn't apply.
+
 ## Publishing
 
 Wheels are built for Linux (manylinux 2_28, x86_64), Windows (win_amd64),
@@ -79,7 +88,7 @@ cibuildwheel config layer on top.
 | P4    | String Ops Fast Path               | Done**  |
 | P5    | DataFrame Row-wise (axis=1)        | Done    |
 | P6    | Polish & UX Parity with Swifter    | Done*   |
-| P7    | Benchmarking & Hardening           | Next    |
+| P7    | Benchmarking & Hardening           | Done    |
 
 \* P6: engine selection, verbose routing explanations, progress bar, and
 wheel packaging are all done — see "Polish & UX" and "Publishing" below.
@@ -115,8 +124,7 @@ flowchart TD
     classDef done fill:#dde9e0,stroke:#3f7d5c,color:#1b1b1b;
     classDef next fill:#f0dcd0,stroke:#b8441f,color:#1b1b1b;
     classDef planned fill:#eae5db,stroke:#9c9284,color:#1b1b1b;
-    class P0,P1,P2,P3,P4,P5,P6 done;
-    class P7 next;
+    class P0,P1,P2,P3,P4,P5,P6,P7 done;
 ```
 
 ## Phase details
@@ -327,10 +335,57 @@ sense that CI can build and ship wheels with real UX polish behind them;
 the one gap is verified swifter benchmark numbers (external compatibility
 issue, not a turboply gap).
 
-### P7 — Benchmarking & Hardening (week 10) — Planned
-- `criterion` benchmarks + `pytest-benchmark`
-- Stress tests: very large DataFrames, memory profiling, thread pool sizing
-- Edge cases: object dtype, mixed NaN/inf, categorical columns, empty/1-row
-  inputs
+### P7 — Benchmarking & Hardening (week 10) — Done
+- `criterion` benchmarks (`benches/native_benches.rs`, `cargo bench`) for
+  the pure Rust compute cores — `affine_f64`, `row_affine_f64`,
+  `str_upper`, `str_contains` — at 1,000 / 50,000 / 200,000 elements.
+  Required extracting those cores out of the `#[pyfunction]` wrappers
+  into `src/core.rs` (PyO3-independent, no `Python<'_>` GIL token needed)
+  since criterion benches can't easily call PyO3-typed functions directly
+  without embedding a Python interpreter — a real architectural fix, not
+  just a benchmark-harness detail, and it added `cargo test`-able unit
+  tests for the cores as a side benefit (`#[cfg(test)] mod tests` in
+  `core.rs`). `[lib] crate-type` gained `"rlib"` alongside `"cdylib"` so
+  the bench/test binaries can link against it.
+- **Three real correctness bugs found and fixed during this phase** (via
+  targeted hardening tests, not code review):
+  1. **NaN outside the verification sample** (`decide.py`, `decide_row.py`):
+     the sample only covers ~12 stride-spaced positions, so a NaN
+     elsewhere in the Series/column would pass verification undetected,
+     and the native path would then apply the naive affine formula to it
+     — silently wrong whenever the real function has explicit
+     NaN-handling logic the sample never exercised. Fixed by checking
+     the *whole* Series/used-columns for NaN up front, not just the
+     sample.
+  2. **Row-wise int64 dtype restoration** (`decide_row.py`): pandas'
+     `df.apply(axis=1)` builds one row Series spanning *every* column
+     before `func` ever runs, so an unused float column upcasts the
+     whole row (and therefore the result) to float64 — even though the
+     function only touches integer columns. The fast path only checked
+     the *used* columns' dtypes, so it wrongly stayed int64 in that case.
+     Fixed with `_pandas_row_would_be_int()`, which mirrors the real
+     rule: all-numeric columns share one upcast-if-any-float dtype;
+     any non-numeric column instead makes the row `object`-dtype, which
+     preserves each column's original type regardless of others —
+     confirmed empirically for both cases, not assumed.
+  3. **bool dtype** (`decide.py`): pandas' `.apply()` keeps `bool` dtype
+     only when `func` is *literally* Python's identity (returns the same
+     object unchanged), but promotes to `int64` for anything
+     arithmetically equivalent — even `x*1+0` — a distinction our affine
+     probing structurally can't observe, since both produce identical
+     coefficients (a=1, b=0). Declined outright rather than guessing
+     wrong on a genuine ambiguity.
+- Stress tests (`tests/test_stress.py`): correctness — not speed,
+  `examples/benchmark.py` covers that — past
+  `core::PARALLEL_THRESHOLD=50_000` for every native path, the one regime
+  no other test exercised (rayon parallel iterators instead of a
+  sequential loop on the Rust side).
+- Edge cases (`tests/test_edge_cases.py`): empty and 1-row Series/
+  DataFrames across every tier, categorical dtype (both as the Series
+  itself and as an unused DataFrame column), object-dtype Series holding
+  Python ints, near-`int64`-range values, all-NaN Series/columns, and the
+  bool-dtype decision above.
 
-**Deliverable:** Documented performance numbers, stable release candidate.
+**Deliverable:** stable release candidate — every native path has
+dedicated correctness tests at scale and at the edges, not just the
+common case, and the three bugs above are now regression-tested.
