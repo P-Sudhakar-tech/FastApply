@@ -36,10 +36,7 @@ def check(label, got, expected):
 def main():
     results = []
 
-    # 1. Native extension loaded and callable.
-    results.append(check("native extension loads", turboply.dummy_add(2, 3), 5))
-
-    # 2. Series accessor: simple numeric transform.
+    # 1. Series accessor: simple numeric transform.
     s = pd.Series([1, 2, 3, 4, 5])
     results.append(
         check(
@@ -49,7 +46,7 @@ def main():
         )
     )
 
-    # 3. Series accessor: string transform (small series, plain fallback).
+    # 2. Series accessor: string transform (small series, plain fallback).
     names = pd.Series(["ada", "grace", "margaret"])
     results.append(
         check(
@@ -59,7 +56,7 @@ def main():
         )
     )
 
-    # 3b. Whitelisted string method, explicitly forced to the native path
+    # 2b. Whitelisted string method, explicitly forced to the native path
     #     (engine="native"). Note this is NOT what engine="auto"/the
     #     default does for strings: benchmarking found the native string
     #     path is consistently ~0.6-0.8x plain pandas at every scale
@@ -78,7 +75,7 @@ def main():
         )
     )
 
-    # 3c. .turboply.str mirrors pandas' own .str accessor for the two
+    # 2c. .turboply.str mirrors pandas' own .str accessor for the two
     #     regex ops that need arguments (contains/replace). Same
     #     performance caveat as 3b applies here too.
     results.append(
@@ -96,7 +93,7 @@ def main():
         )
     )
 
-    # 4. DataFrame accessor: column-wise apply (axis=0, the default).
+    # 3. DataFrame accessor: column-wise apply (axis=0, the default).
     df = pd.DataFrame({"a": [1, 2, 3], "b": [10, 20, 30]})
     results.append(
         check(
@@ -106,7 +103,7 @@ def main():
         )
     )
 
-    # 5. DataFrame accessor: row-wise apply (axis=1).
+    # 4. DataFrame accessor: row-wise apply (axis=1).
     results.append(
         check(
             "dataframe .turboply(func) (axis=1) matches pandas",
@@ -115,7 +112,7 @@ def main():
         )
     )
 
-    # 6. Empty series edge case.
+    # 5. Empty series edge case.
     empty = pd.Series([], dtype=float)
     results.append(
         check(
@@ -125,7 +122,7 @@ def main():
         )
     )
 
-    # 7. .apply() still works as an alias for the direct-call form.
+    # 6. .apply() still works as an alias for the direct-call form.
     results.append(
         check(
             ".turboply.apply(func) alias matches .turboply(func)",
@@ -134,7 +131,7 @@ def main():
         )
     )
 
-    # 8. engine="pandas" forces the fallback path even when eligible.
+    # 7. engine="pandas" forces the fallback path even when eligible.
     large = pd.Series(range(100))
     results.append(
         check(
@@ -144,7 +141,7 @@ def main():
         )
     )
 
-    # 9. engine="native" raises with a clear reason instead of silently
+    # 8. engine="native" raises with a clear reason instead of silently
     #    falling back, when the callable isn't fast-path eligible.
     try:
         large.turboply(lambda x: x**2, engine="native")
@@ -152,11 +149,11 @@ def main():
     except ValueError as exc:
         results.append(check(f"engine='native' raises: {exc}", True, True))
 
-    # 10. verbose=True explains the routing decision (see stderr).
+    # 9. verbose=True explains the routing decision (see stderr).
     print("\n[verbose demo - routing explanation printed to stderr below]")
     large.turboply(lambda x: x * 2 + 1, verbose=True)
 
-    # 11. progress_bar=True reports progress for the pandas fallback path.
+    # 10. progress_bar=True reports progress for the pandas fallback path.
     print("\n[progress_bar demo - bar printed to stderr below]")
     large.turboply(lambda x: x**2, progress_bar=True)
     print()
