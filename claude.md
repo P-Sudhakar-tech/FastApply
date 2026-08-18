@@ -190,7 +190,8 @@ docs should lead with the direct-call form.
   time a small sample (`SAMPLE_ROWS=100`) both serially and
   threaded-chunked (`ThreadPoolExecutor`), and only use the threaded
   version on the full data if the sample measured a real speedup
-  (`MIN_SPEEDUP=1.2x`). This is a measured decision, not an assumption:
+  (`MIN_SPEEDUP=1.5x`, raised from an initial 1.2x). This is a measured
+  decision, not an assumption:
   CPython's GIL means pure-Python CPU-bound callables see no benefit from
   threading (only one thread runs bytecode at a time) and the race
   correctly converges to serial pandas for those; I/O-bound or otherwise

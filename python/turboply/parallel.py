@@ -29,7 +29,7 @@ import pandas as pd
 
 MIN_ROWS = 2000
 SAMPLE_ROWS = 100
-MIN_SPEEDUP = 1.2
+MIN_SPEEDUP = 1.5
 _MIN_MEASURABLE_TIME = 0.001
 _MAX_WORKERS = min(32, os.cpu_count() or 4)
 
