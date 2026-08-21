@@ -17,8 +17,8 @@ fn affine_f64<'py>(
     b: f64,
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let slice = arr.as_slice()?;
-    let out = py.allow_threads(|| core::affine_f64(slice, a, b));
-    Ok(out.into_pyarray_bound(py))
+    let out = py.detach(|| core::affine_f64(slice, a, b));
+    Ok(out.into_pyarray(py))
 }
 
 /// Integer counterpart of [`affine_f64`]. Used whenever both the Series and
@@ -33,8 +33,8 @@ fn affine_i64<'py>(
     b: i64,
 ) -> PyResult<Bound<'py, PyArray1<i64>>> {
     let slice = arr.as_slice()?;
-    let out = py.allow_threads(|| core::affine_i64(slice, a, b));
-    Ok(out.into_pyarray_bound(py))
+    let out = py.detach(|| core::affine_i64(slice, a, b));
+    Ok(out.into_pyarray(py))
 }
 
 /// Elementwise `abs(x)` over a f64 array. See [`affine_f64`] for the
@@ -42,36 +42,36 @@ fn affine_i64<'py>(
 #[pyfunction]
 fn abs_f64<'py>(py: Python<'py>, arr: PyReadonlyArray1<'py, f64>) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let slice = arr.as_slice()?;
-    let out = py.allow_threads(|| core::abs_f64(slice));
-    Ok(out.into_pyarray_bound(py))
+    let out = py.detach(|| core::abs_f64(slice));
+    Ok(out.into_pyarray(py))
 }
 
 /// Integer counterpart of [`abs_f64`]; see [`affine_i64`] for why it exists.
 #[pyfunction]
 fn abs_i64<'py>(py: Python<'py>, arr: PyReadonlyArray1<'py, i64>) -> PyResult<Bound<'py, PyArray1<i64>>> {
     let slice = arr.as_slice()?;
-    let out = py.allow_threads(|| core::abs_i64(slice));
-    Ok(out.into_pyarray_bound(py))
+    let out = py.detach(|| core::abs_i64(slice));
+    Ok(out.into_pyarray(py))
 }
 
 /// Elementwise `s.upper()` over a list of strings. See [`affine_f64`] for
 /// the sequential/parallel threshold rationale.
 #[pyfunction]
 fn str_upper(py: Python<'_>, items: Vec<String>) -> Vec<String> {
-    py.allow_threads(|| core::str_upper(&items))
+    py.detach(|| core::str_upper(&items))
 }
 
 /// Elementwise `s.lower()` over a list of strings.
 #[pyfunction]
 fn str_lower(py: Python<'_>, items: Vec<String>) -> Vec<String> {
-    py.allow_threads(|| core::str_lower(&items))
+    py.detach(|| core::str_lower(&items))
 }
 
 /// Elementwise `s.strip()` over a list of strings — trims Unicode
 /// whitespace from both ends, same as Rust's `str::trim()`.
 #[pyfunction]
 fn str_strip(py: Python<'_>, items: Vec<String>) -> Vec<String> {
-    py.allow_threads(|| core::str_strip(&items))
+    py.detach(|| core::str_strip(&items))
 }
 
 /// Elementwise regex search over a list of strings: does `pattern` match
@@ -79,7 +79,7 @@ fn str_strip(py: Python<'_>, items: Vec<String>) -> Vec<String> {
 #[pyfunction]
 fn str_contains(py: Python<'_>, items: Vec<String>, pattern: String) -> PyResult<Vec<bool>> {
     let re = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(py.allow_threads(|| core::str_contains(&items, &re)))
+    Ok(py.detach(|| core::str_contains(&items, &re)))
 }
 
 /// Elementwise regex replace-all over a list of strings. Backs
@@ -92,7 +92,7 @@ fn str_contains(py: Python<'_>, items: Vec<String>, pattern: String) -> PyResult
 #[pyfunction]
 fn str_replace(py: Python<'_>, items: Vec<String>, pattern: String, repl: String) -> PyResult<Vec<String>> {
     let re = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(py.allow_threads(|| core::str_replace(&items, &re, &repl)))
+    Ok(py.detach(|| core::str_replace(&items, &re, &repl)))
 }
 
 /// Row-wise `sum(coeffs[i] * columns[i][row]) + intercept`, evaluated for
@@ -125,8 +125,8 @@ fn row_affine_f64<'py>(
         }
     }
 
-    let out = py.allow_threads(|| core::row_affine_f64(&slices, &coeffs, intercept));
-    Ok(out.into_pyarray_bound(py))
+    let out = py.detach(|| core::row_affine_f64(&slices, &coeffs, intercept));
+    Ok(out.into_pyarray(py))
 }
 
 #[pymodule]

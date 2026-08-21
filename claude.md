@@ -11,12 +11,31 @@ docs (this file, build scripts, CI) can and should stay technically accurate.
 
 ## Tech stack
 
-- Native extension: Rust + [PyO3](https://pyo3.rs), built with
+- Native extension: Rust + [PyO3](https://pyo3.rs) 0.29, built with
   [maturin](https://www.maturin.rs)
 - Parallelism: [rayon](https://docs.rs/rayon)
-- Zero-copy array transfer: [rust-numpy](https://docs.rs/numpy)
+- Zero-copy array transfer: [rust-numpy](https://docs.rs/numpy) 0.29
 - Python-side: pandas accessor API (`register_series_accessor` /
   `register_dataframe_accessor`), pytest
+- Supported Python: 3.10–3.14 (matches CI's matrix; `pyproject.toml`'s
+  `requires-python` floor is 3.9, but that's untested — treat 3.10 as the
+  real floor). Bumped from PyO3 0.22 in August 2026 specifically to add
+  Python 3.14 support: 0.22's build-time version check hard-rejected any
+  interpreter newer than 3.13, which surfaced as a real build failure
+  under WSL Ubuntu 26.04 (whose default `python3` is 3.14) — not a
+  Windows-only quirk. PyO3 0.24 turned out to only add *beta* 3.14
+  recognition (the cfg flags exist but the version ceiling still errors
+  without `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`); the ceiling was fully
+  lifted by 0.25, so 0.29 (latest at the time) was used rather than
+  pinning to the exact minimum. The only code-level fallout from the
+  0.22→0.29 jump: `Python::allow_threads` was renamed to `Python::detach`
+  in 0.25 (same signature, straight rename) and
+  `IntoPyArray::into_pyarray_bound` was renamed to `into_pyarray` (the
+  `_bound` suffix is gone now that `Bound` is the only representation) —
+  both updated across every native op in `src/lib.rs`. Verified on real
+  Ubuntu (WSL2, not just CI's assumed behavior) against Python 3.12 and
+  3.14, and on Windows against 3.11, all three: full pytest suite green,
+  6/6 Rust unit tests green, `examples/quickstart.py` 11/11.
 
 ## Local dev environment note
 
