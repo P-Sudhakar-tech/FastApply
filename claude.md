@@ -20,25 +20,28 @@ docs (this file, build scripts, CI) can and should stay technically accurate.
 
 ## Local dev environment note
 
-On this machine the precompiled `maturin.exe` from PyPI cannot launch —
-it's linked against the MSVC Visual C++ Redistributable, which isn't
-installed here (only the GNU Rust toolchain is). Workaround: `./build.ps1`
-runs `cargo build --release` directly, copies the resulting DLL into
+`maturin develop --release` and `maturin build --release` both work
+directly on this machine as of August 2026 — an earlier version of this
+note said the precompiled `maturin.exe` couldn't launch here (missing MSVC
+Visual C++ Redistributable); that's no longer reproducible, whatever
+changed (redistributable installed, maturin reinstalled, or similar).
+`./build.ps1` (runs `cargo build --release` directly, copies the DLL into
 `python/turboply/_turboply.pyd`, and writes a `turboply.pth` file into the
-venv's site-packages pointing at `python/` — the same end result as
-`maturin develop`, so `import turboply` works without setting
-`PYTHONPATH`. CI runs on Ubuntu with a proper toolchain, so
-`maturin develop` works there unaffected. Prefer `maturin develop --release`
-first; fall back to `build.ps1` only if it fails to launch.
+venv's site-packages) still works too and remains the fallback if
+`maturin develop` ever fails to launch again — worth trying `maturin
+develop --release` first regardless, since it's the standard path.
 
-Separately, `cargo test` / `cargo bench` also can't run locally — they
-pull in dev-dependencies (criterion) that need `windows-sys`, which needs
-`dlltool`, which needs the rest of a full MinGW-w64 binutils install; this
-machine only has rustup's linker-only self-contained subset (see its own
-`GCC-WARNING.txt`: "gcc.exe contained in this folder cannot be used for
-compiling C files - it is only used as a linker"). `cargo build` alone
-works fine (no dev-deps needed), so `./build.ps1` is unaffected. CI runs
-`cargo test --release --lib` on Ubuntu, where this doesn't apply.
+`cargo test --release --lib` and `cargo bench` also both build and run
+cleanly now — the previously suspected `dlltool`/MinGW-w64 binutils gap
+turned out not to be the real blocker (or is no longer present). The one
+thing that does still trip them up: this machine's Python is a
+`uv`-managed install with `python311.dll` living outside `.venv/Scripts`
+(check `python -c "import sys; print(sys.base_prefix)"` for its actual
+location), so a test/bench binary can fail at *run* time with
+`STATUS_DLL_NOT_FOUND` if that directory isn't on `PATH` — prepend it
+(PowerShell: `$env:PATH = "<that dir>;$env:PATH"`) if that happens. CI
+runs everything on Ubuntu with a proper toolchain regardless, so none of
+this affects CI either way.
 
 ## Publishing
 
