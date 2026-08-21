@@ -5,12 +5,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use regex::Regex;
 
-/// Trivial native function used to verify the PyO3 build/import path end to end.
-#[pyfunction]
-fn dummy_add(a: i64, b: i64) -> i64 {
-    a + b
-}
-
 /// Elementwise `a * x + b` over a f64 array. Covers add/sub/mul/div-by-scalar
 /// and any composition of them, since all of those reduce to a single affine
 /// transform. GIL is released either way; only arrays past
@@ -137,7 +131,6 @@ fn row_affine_f64<'py>(
 
 #[pymodule]
 fn _turboply(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(dummy_add, m)?)?;
     m.add_function(wrap_pyfunction!(affine_f64, m)?)?;
     m.add_function(wrap_pyfunction!(affine_i64, m)?)?;
     m.add_function(wrap_pyfunction!(abs_f64, m)?)?;

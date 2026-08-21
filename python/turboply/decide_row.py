@@ -30,16 +30,12 @@ import numpy as np
 import pandas as pd
 
 from . import _turboply
-from .decide import Decision
+from .decide import Decision, _is_real_number
 
 MIN_ROWS = 50
 SAMPLE_SIZE = 12
 MAX_COLUMNS = 20
 _TOL = 1e-9
-
-
-def _is_real_number(value):
-    return isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool)
 
 
 def _probe_row(columns, values):
