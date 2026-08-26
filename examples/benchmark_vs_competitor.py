@@ -4,7 +4,7 @@ Optional — requires swifter, which is NOT a package dependency (it pulls
 in dask, tqdm, etc. that turboply itself has no use for):
 
     .venv/Scripts/python.exe -m pip install swifter
-    .venv/Scripts/python.exe examples/benchmark_vs_swifter.py
+    .venv/Scripts/python.exe examples/benchmark_vs_competitor.py
 
 Same methodology as examples/benchmark.py: warmup + median of many
 repeats, since these calls run in well under a millisecond. See that

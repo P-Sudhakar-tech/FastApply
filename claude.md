@@ -117,7 +117,7 @@ wheel packaging are all done — see "Polish & UX" and "Publishing" below.
 The one open item is live benchmark numbers against swifter: swifter
 1.4.0 doesn't run cleanly against this repo's pandas/Python versions (a
 swifter/dask compatibility gap, not a turboply issue) — see
-`examples/benchmark_vs_swifter.py`'s error message for specifics.
+`examples/benchmark_vs_competitor.py`'s error message for specifics.
 
 \*\* P4: correctly implemented and fully tested, but benchmarking (500 to
 1,000,000 rows) found the native string path is consistently ~0.6-0.8x
@@ -343,7 +343,7 @@ pandas (constructs a Series object per row internally).
   time.
 - Docs + README with benchmarks vs plain `.apply()` — done
   (`examples/benchmark.py`). Vs swifter — script exists
-  (`examples/benchmark_vs_swifter.py`) but swifter 1.4.0 doesn't run
+  (`examples/benchmark_vs_competitor.py`) but swifter 1.4.0 doesn't run
   cleanly against this repo's pandas 3.x / Python 3.11, so live numbers
   aren't captured; see \* above.
 - Tests (`tests/test_polish.py`): engine="pandas" skips the fast path

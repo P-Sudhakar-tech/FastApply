@@ -1,7 +1,6 @@
 # Turboply
 
-A drop-in, accelerated replacement for `pandas.apply()`, in the spirit of
-[swifter](https://github.com/jmcarpenter2/swifter).
+A drop-in, accelerated replacement for `pandas.apply()`.
 
 Status: **feature-complete** (all 8 roadmap phases) — numeric transforms
 detected as linear/abs (`x * 2 + 1`) and row-wise DataFrame functions
@@ -107,9 +106,9 @@ compute cores directly (1,000 / 50,000 / 200,000 elements), independent
 of Python/PyO3 marshaling overhead — useful for catching a regression in
 the Rust layer itself.
 
-`examples/benchmark_vs_swifter.py` adds a comparison against
-[swifter](https://github.com/jmcarpenter2/swifter)'s `.apply()`. It's a
-separate opt-in script (not a `turboply` dependency) since swifter pulls in
-dask, tqdm, etc. As of this writing swifter 1.4.0 doesn't run cleanly against
-recent pandas/Python — see that script's error message for the specific
+`examples/benchmark_vs_competitor.py` adds a comparison against another
+accelerated-`.apply()` library. It's a separate opt-in script (not a
+`turboply` dependency), since that library pulls in dask, tqdm, etc. As of
+this writing its 1.4.0 release doesn't run cleanly against recent
+pandas/Python — see that script's error message for the specific
 compatibility gap if you hit it.
