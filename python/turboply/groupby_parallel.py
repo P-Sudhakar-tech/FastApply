@@ -33,6 +33,7 @@ just not accelerated for that call.
 
 import itertools
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -41,6 +42,27 @@ SAMPLE_GROUPS = 8
 MIN_SPEEDUP = 1.5
 _MIN_MEASURABLE_TIME = 0.001
 _MAX_WORKERS = min(32, os.cpu_count() or 4)
+
+# A fresh ThreadPoolExecutor spawns real OS threads on every construction,
+# and on Windows that cost (observed several ms) is easily larger than the
+# work being measured for a small SAMPLE_GROUPS -- benchmarking a genuinely
+# GIL-releasing callable (examples/benchmark_groupby.py) showed this
+# swamping the sample-timing signal entirely, reporting ~1.0x instead of a
+# real speedup. A single lazily-created, never-shutdown, module-level pool
+# reused across both the sample-timing pass and the full-data pass (and
+# across separate try_parallel_fallback calls) pays that thread-creation
+# cost once per process instead of twice per call.
+_executor_lock = threading.Lock()
+_executor = None
+
+
+def _get_executor():
+    global _executor
+    if _executor is None:
+        with _executor_lock:
+            if _executor is None:
+                _executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
+    return _executor
 
 
 def _call(func, group, args, kwargs):
@@ -60,9 +82,9 @@ def _run_serial(groups, func, args, kwargs):
 def _run_threaded(groups, func, args, kwargs):
     if not groups:
         return []
-    with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(groups))) as pool:
-        futures = [pool.submit(_call, func, g, args, kwargs) for g in groups]
-        return [f.result() for f in futures]
+    pool = _get_executor()
+    futures = [pool.submit(_call, func, g, args, kwargs) for g in groups]
+    return [f.result() for f in futures]
 
 
 def try_parallel_fallback(groupby_obj, func, args, kwargs):

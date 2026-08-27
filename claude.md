@@ -575,6 +575,25 @@ half of the same request.
   removing `include_groups` from those two specific tests (the decline
   behavior itself has its own dedicated tests); every other test keeps
   it, matching how the real call site actually uses it.
+- **A second, more consequential bug found via `examples/benchmark_groupby.py`,
+  not by inspection**: the very first benchmark run showed ~1.0x on the
+  GIL-releasing case — no speedup at all, contradicting the correctness
+  tests, which do prove threading engages. Root cause: `_run_threaded`
+  built a *fresh* `ThreadPoolExecutor` on every call (both the
+  sample-timing pass and the full-data pass), and real OS thread
+  creation on Windows costs several milliseconds — comparable to or
+  larger than the total sampled work at `SAMPLE_GROUPS=8`, swamping the
+  timing signal so the race almost always declined. Fixed with a single
+  lazily-created, never-shut-down, module-level executor
+  (`_get_executor()`, thread-safe double-checked lazy init) reused
+  across both passes and across separate calls, paying the thread-spawn
+  cost once per process instead of twice per call. Confirmed the fix
+  actually worked by re-running the benchmark rather than trusting the
+  reasoning alone: GIL-releasing case went from ~1.0x to a real,
+  repeatable ~2.1x (this machine: 4 CPU cores) after the fix. The
+  benchmark script itself also had the *same* `include_groups=False`
+  mistake as the two tests above on its first draft — caught and fixed
+  the same way, in every one of its three cases.
 
 **Deliverable:** `.groupby(...).turboply(func)` under `engine="auto"`
 now actually attempts real acceleration via threading before falling
