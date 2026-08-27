@@ -48,6 +48,14 @@ tiers 3-4.
 `progress_bar=True` reports progress for the pandas fallback path only —
 none of the other tiers do a single-threaded row-by-row loop, so there's
 no equivalent per-row progress to report for them.
+
+`.turboply` on the result of `.groupby(...)` (DataFrameGroupBy or
+SeriesGroupBy — see TurboplyGroupByAccessor below) is a correctness-only
+passthrough to `GroupBy.apply()`: no native fast path exists for it yet,
+so `engine="auto"`/`"pandas"` both always use plain pandas and
+`engine="native"` raises. pandas has no `register_*_groupby_accessor`
+the way it does for Series/DataFrame/Index, so this attaches the
+accessor descriptor directly to the GroupBy classes instead.
 """
 
 import sys
@@ -57,6 +65,14 @@ import pandas as pd
 from . import decide, decide_row, decide_str, parallel
 from .progress import with_progress
 from .str_accessor import TurboplyStrAccessor
+
+try:
+    # The long-lived internal path; pandas.api.typing (a public alias for
+    # the same classes) only exists on newer pandas, so this is what
+    # actually covers pyproject.toml's pandas>=1.5 floor.
+    from pandas.core.groupby.generic import DataFrameGroupBy, SeriesGroupBy
+except ImportError:  # pragma: no cover - hedge against a future pandas reorg
+    from pandas.api.typing import DataFrameGroupBy, SeriesGroupBy
 
 _ENGINES = ("auto", "native", "pandas")
 
@@ -194,3 +210,63 @@ class TurboplyDataFrameAccessor:
         return df.apply(func, *args, axis=axis, **kwargs)
 
     apply = __call__
+
+
+class _CachedGroupByAccessor:
+    """Reimplements pandas' own accessor-descriptor pattern (caches the
+    accessor instance on the owning object after first access, same as
+    pandas.core.accessor.CachedAccessor) locally rather than importing it.
+
+    pandas.api.extensions has register_series_accessor/
+    register_dataframe_accessor/register_index_accessor, but no
+    register_*_groupby_accessor — DataFrameGroupBy/SeriesGroupBy have no
+    first-class accessor-registration API to hook into, so this attaches
+    the descriptor directly via setattr() on those classes instead."""
+
+    def __init__(self, name, accessor):
+        self._name = name
+        self._accessor = accessor
+
+    def __get__(self, obj, cls):
+        if obj is None:
+            return self._accessor
+        accessor_obj = self._accessor(obj)
+        object.__setattr__(obj, self._name, accessor_obj)
+        return accessor_obj
+
+
+class TurboplyGroupByAccessor:
+    """`.turboply` on the result of `.groupby(...)` — DataFrameGroupBy or
+    SeriesGroupBy alike, since both just need `.apply(func, *args,
+    **kwargs)` delegated through unchanged; what differs between them
+    (whether func receives a sub-DataFrame or sub-Series per group) is
+    entirely pandas' own concern, not this accessor's.
+
+    No native fast path exists for GroupBy yet — this always delegates to
+    plain GroupBy.apply(), so it's correctness-equivalent to it by
+    construction (the same starting point every other accelerated tier in
+    this project began from, per decide.py's docstring, before any native
+    path was trusted to slot in behind it). `engine="native"` raises
+    rather than silently running the (currently nonexistent) fast path,
+    the same reason-carrying error the Series/DataFrame accessors raise
+    for their own ineligible cases."""
+
+    def __init__(self, groupby_obj):
+        self._obj = groupby_obj
+
+    def __call__(self, func, *args, engine="auto", verbose=False, progress_bar=False, **kwargs):
+        _check_engine(engine)
+        if engine == "native":
+            raise ValueError("engine='native' requested but not eligible: no native GroupBy fast path implemented yet")
+        reason = "engine='pandas' forced" if engine == "pandas" else "no native GroupBy fast path implemented yet"
+        _log(verbose, "groupby", "pandas", reason)
+
+        if progress_bar:
+            func = with_progress(func, total=self._obj.ngroups, label="turboply")
+        return self._obj.apply(func, *args, **kwargs)
+
+    apply = __call__
+
+
+DataFrameGroupBy.turboply = _CachedGroupByAccessor("turboply", TurboplyGroupByAccessor)
+SeriesGroupBy.turboply = _CachedGroupByAccessor("turboply", TurboplyGroupByAccessor)

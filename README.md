@@ -72,6 +72,13 @@ df.turboply(lambda row: row["a"] + row["b"], axis=1)
 names = pd.Series(["  Ada  ", "GRACE", "margaret"] * 50)
 names.turboply(str.upper, engine="native")
 names.turboply.str.contains(r"^GRACE$")
+
+# .groupby(...).turboply(func) also works — correctness-only for now (no
+# native GroupBy fast path yet), so it's a drop-in for
+# .groupby(...).apply(func) with the same engine/verbose/progress_bar
+# options as everything else. engine="native" raises rather than
+# pretending to accelerate something it can't yet.
+df.groupby("a").turboply(lambda g: g["b"].sum())
 ```
 
 ### Options

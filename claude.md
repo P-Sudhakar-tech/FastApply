@@ -111,6 +111,7 @@ cibuildwheel config layer on top.
 | P5    | DataFrame Row-wise (axis=1)        | Done    |
 | P6    | Polish & UX Parity with Swifter    | Done*   |
 | P7    | Benchmarking & Hardening           | Done    |
+| P8    | GroupBy Support (Correctness-Only) | Done*** |
 
 \* P6: engine selection, verbose routing explanations, progress bar, and
 wheel packaging are all done — see "Polish & UX" and "Publishing" below.
@@ -124,6 +125,12 @@ swifter/dask compatibility gap, not a turboply issue) — see
 plain pandas — never faster — so it's deliberately excluded from
 `engine="auto"`, reachable only via explicit `engine="native"` or
 `.turboply.str.contains()`/`.replace()`. See the P4 section below for why.
+
+\*\*\* P8: `.groupby(...).turboply(func)` works and is fully tested, but
+— unlike every other tier — there is no native fast path behind it at
+all yet, not even one excluded from "auto" the way P4's string path is.
+It's a pure, always-on passthrough to `GroupBy.apply()`. See the P8
+section below.
 
 ## Flow
 
@@ -141,12 +148,13 @@ flowchart TD
     P4["P4 · String Ops Fast Path\nregex-backed str accessors"] --> P5
     P5["P5 · DataFrame Row-wise (axis=1)\ncolumnar marshaling"] --> P6
     P6["P6 · Polish & UX Parity\nprogress bar, config, docs, wheels"] --> P7
-    P7["P7 · Benchmarking & Hardening\ncriterion, stress tests, edge cases"]
+    P7["P7 · Benchmarking & Hardening\ncriterion, stress tests, edge cases"] --> P8
+    P8["P8 · GroupBy Support\ncorrectness-only passthrough, no native path yet"]
 
     classDef done fill:#dde9e0,stroke:#3f7d5c,color:#1b1b1b;
     classDef next fill:#f0dcd0,stroke:#b8441f,color:#1b1b1b;
     classDef planned fill:#eae5db,stroke:#9c9284,color:#1b1b1b;
-    class P0,P1,P2,P3,P4,P5,P6,P7 done;
+    class P0,P1,P2,P3,P4,P5,P6,P7,P8 done;
 ```
 
 ## Phase details
@@ -412,3 +420,68 @@ issue, not a turboply gap).
 **Deliverable:** stable release candidate — every native path has
 dedicated correctness tests at scale and at the edges, not just the
 common case, and the three bugs above are now regression-tested.
+
+### P8 — GroupBy Support (Correctness-Only) — Done***
+
+- Prompted by a real user error, not planned in the original roadmap:
+  `df.groupby(...).turboply(func)` raised
+  `AttributeError: 'DataFrameGroupBy' object has no attribute 'turboply'`
+  — turboply had only ever registered accessors for `pd.Series` and
+  `pd.DataFrame`, never for the `DataFrameGroupBy`/`SeriesGroupBy`
+  objects `.groupby(...)` returns, which are entirely separate classes.
+- `accessor.py`'s `TurboplyGroupByAccessor` fixes this the same way P1
+  fixed the original bare-accessor gap: get a correctness-verified
+  passthrough working first, before any acceleration is attempted. It
+  always delegates to `GroupBy.apply(func, *args, **kwargs)` unchanged,
+  so it's correctness-equivalent by construction — including whatever a
+  given pandas version's own `include_groups`/grouping-column-inclusion
+  behavior happens to be, since that's never touched or special-cased
+  here. One accessor class serves both `DataFrameGroupBy` and
+  `SeriesGroupBy`: the only difference between them (whether `func`
+  receives a sub-DataFrame or sub-Series per group) is pandas' concern,
+  not this accessor's — it just proxies `.apply()` either way.
+- **No native fast path exists for GroupBy at all** — a real gap, not an
+  oversight. This is a different situation from P4's string ops (which
+  have a native path, just an unprofitable one, so `"auto"` skips it but
+  `engine="native"` can still reach it). Here `engine="native"` raises
+  `ValueError` unconditionally with a clear reason, rather than silently
+  running plain pandas or pretending to accelerate something that
+  doesn't exist yet.
+- **No `register_*_groupby_accessor` to hook into**: unlike Series/
+  DataFrame/Index, `pandas.api.extensions` has no public registration
+  helper for GroupBy objects. Fixed by attaching a small local
+  `_CachedGroupByAccessor` descriptor (reimplementing pandas' own
+  accessor-caching pattern rather than importing pandas' private
+  `CachedAccessor`) directly onto `DataFrameGroupBy`/`SeriesGroupBy` via
+  `setattr`. Those classes are imported from
+  `pandas.core.groupby.generic` — the long-lived internal path, chosen
+  over the newer public `pandas.api.typing` alias specifically because
+  it's the one that actually covers `pyproject.toml`'s `pandas>=1.5`
+  floor (`pandas.api.typing` is a more recent addition); a fallback
+  import from `pandas.api.typing` hedges against a future pandas reorg
+  of the internal path.
+- `engine`/`verbose`/`progress_bar` all work the same as every other
+  accessor for consistency, even though `engine="auto"` and `"pandas"`
+  currently do the exact same thing (no tier to skip past yet) —
+  `progress_bar=True` reports progress per group (`total=`
+  `groupby_obj.ngroups`), reusing `progress.py`'s `with_progress` as-is
+  since a GroupBy callable receives one argument per call (the group)
+  the same shape `with_progress`'s wrapper already expects.
+- Tests (`tests/test_groupby.py`): equivalence for both `DataFrameGroupBy`
+  and `SeriesGroupBy`, multi-key `groupby(..., dropna=False)` specifically
+  (the shape of the real call site that surfaced this gap), scalar/
+  Series/DataFrame-shaped per-group results, extra positional/keyword
+  argument passthrough, the `.apply()` alias, `engine="pandas"` forced,
+  `engine="native"` raising with the specific no-fast-path reason,
+  invalid-engine rejection, verbose output (both the default and
+  forced-pandas reason strings) and its silence by default,
+  `progress_bar` output and its silence by default, and that the
+  accessor instance is cached (same object on repeated access) rather
+  than rebuilt every time.
+
+**Deliverable:** `df.groupby(...).turboply(func)` and
+`series.groupby(...).turboply(func)` are drop-in, correctness-verified
+replacements for `GroupBy.apply()` — not yet faster than it, unlike
+every other engine="auto" tier, but no longer broken. A real native
+GroupBy fast path (e.g. detecting common aggregation shapes) is a
+plausible future phase, not attempted here.

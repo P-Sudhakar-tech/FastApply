@@ -158,6 +158,17 @@ def main():
     large.turboply(lambda x: x**2, progress_bar=True)
     print()
 
+    # 11. .groupby(...).turboply(func) — correctness-only passthrough to
+    #     GroupBy.apply() (no native fast path for GroupBy yet).
+    grouped = df.groupby("a")
+    results.append(
+        check(
+            "groupby .turboply(func) matches GroupBy.apply(func)",
+            grouped.turboply(lambda g: g["b"].sum(), include_groups=False),
+            grouped.apply(lambda g: g["b"].sum(), include_groups=False),
+        )
+    )
+
     passed = sum(results)
     print(f"\n{passed}/{len(results)} checks passed")
     if passed != len(results):
