@@ -73,11 +73,14 @@ names = pd.Series(["  Ada  ", "GRACE", "margaret"] * 50)
 names.turboply(str.upper, engine="native")
 names.turboply.str.contains(r"^GRACE$")
 
-# .groupby(...).turboply(func) also works — correctness-only for now (no
-# native GroupBy fast path yet), so it's a drop-in for
+# .groupby(...).turboply(func) also works — a drop-in for
 # .groupby(...).apply(func) with the same engine/verbose/progress_bar
-# options as everything else. engine="native" raises rather than
-# pretending to accelerate something it can't yet.
+# options as everything else. engine="auto" tries a threaded parallel
+# fallback first (measured, not assumed — same approach as the
+# GIL-releasing-callable case above, just chunked by group), then falls
+# back to plain pandas. There's no *native* (Rust) GroupBy path though,
+# so engine="native" raises rather than pretending to accelerate
+# something that doesn't exist yet.
 df.groupby("a").turboply(lambda g: g["b"].sum())
 ```
 

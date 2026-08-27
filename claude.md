@@ -112,6 +112,7 @@ cibuildwheel config layer on top.
 | P6    | Polish & UX Parity with Swifter    | Done*   |
 | P7    | Benchmarking & Hardening           | Done    |
 | P8    | GroupBy Support (Correctness-Only) | Done*** |
+| P9    | GroupBy Threaded Parallel Fallback | Done    |
 
 \* P6: engine selection, verbose routing explanations, progress bar, and
 wheel packaging are all done — see "Polish & UX" and "Publishing" below.
@@ -127,10 +128,12 @@ plain pandas — never faster — so it's deliberately excluded from
 `.turboply.str.contains()`/`.replace()`. See the P4 section below for why.
 
 \*\*\* P8: `.groupby(...).turboply(func)` works and is fully tested, but
-— unlike every other tier — there is no native fast path behind it at
-all yet, not even one excluded from "auto" the way P4's string path is.
-It's a pure, always-on passthrough to `GroupBy.apply()`. See the P8
-section below.
+— at the time — there was no native OR parallel fast path behind it at
+all, unlike every other tier. It was a pure, always-on passthrough to
+`GroupBy.apply()`. P9 (below) added the threaded-parallel tier on top of
+this same correctness-only foundation; there is still no *native* (Rust)
+GroupBy path, so `engine="native"` still always raises. See the P8 and
+P9 sections below.
 
 ## Flow
 
@@ -149,12 +152,13 @@ flowchart TD
     P5["P5 · DataFrame Row-wise (axis=1)\ncolumnar marshaling"] --> P6
     P6["P6 · Polish & UX Parity\nprogress bar, config, docs, wheels"] --> P7
     P7["P7 · Benchmarking & Hardening\ncriterion, stress tests, edge cases"] --> P8
-    P8["P8 · GroupBy Support\ncorrectness-only passthrough, no native path yet"]
+    P8["P8 · GroupBy Support\ncorrectness-only passthrough"] --> P9
+    P9["P9 · GroupBy Threaded Parallel Fallback\nsample-measured, chunked by group"]
 
     classDef done fill:#dde9e0,stroke:#3f7d5c,color:#1b1b1b;
     classDef next fill:#f0dcd0,stroke:#b8441f,color:#1b1b1b;
     classDef planned fill:#eae5db,stroke:#9c9284,color:#1b1b1b;
-    class P0,P1,P2,P3,P4,P5,P6,P7,P8 done;
+    class P0,P1,P2,P3,P4,P5,P6,P7,P8,P9 done;
 ```
 
 ## Phase details
@@ -471,9 +475,10 @@ common case, and the three bugs above are now regression-tested.
   import from `pandas.api.typing` hedges against a future pandas reorg
   of the internal path.
 - `engine`/`verbose`/`progress_bar` all work the same as every other
-  accessor for consistency, even though `engine="auto"` and `"pandas"`
-  currently do the exact same thing (no tier to skip past yet) —
-  `progress_bar=True` reports progress per group (`total=`
+  accessor for consistency — at the time `engine="auto"` and `"pandas"`
+  did the exact same thing (no tier to skip past yet); P9 (below) later
+  gave `"auto"` a real tier to try first. `progress_bar=True` reports
+  progress per group (`total=`
   `groupby_obj.ngroups`), reusing `progress.py`'s `with_progress` as-is
   since a GroupBy callable receives one argument per call (the group)
   the same shape `with_progress`'s wrapper already expects.
@@ -491,7 +496,93 @@ common case, and the three bugs above are now regression-tested.
 
 **Deliverable:** `df.groupby(...).turboply(func)` and
 `series.groupby(...).turboply(func)` are drop-in, correctness-verified
-replacements for `GroupBy.apply()` — not yet faster than it, unlike
-every other engine="auto" tier, but no longer broken. A real native
-GroupBy fast path (e.g. detecting common aggregation shapes) is a
-plausible future phase, not attempted here.
+replacements for `GroupBy.apply()` — no longer broken, though at this
+point still no faster than plain pandas. P9 (below) is the acceleration
+half of the same request.
+
+### P9 — GroupBy Threaded Parallel Fallback — Done
+
+- Direct follow-up to P8, prompted by the same real user: once
+  `.groupby(...).turboply(func)` stopped raising, the next question was
+  "then the performance should be increased for this also." The
+  function in question (`payroll_month_range_generator`) takes extra
+  kwargs and does arbitrary custom logic — not a simple aggregation
+  shape like `lambda g: g['col'].sum()` — so a P2-style affine/
+  aggregation-pattern detector wouldn't have helped this specific case
+  at all. A threaded parallel fallback, mirroring P3's Series/DataFrame
+  approach but chunked by group instead of row range, helps *any*
+  GIL-releasing custom callable regardless of shape, which is the
+  broader, more honest win.
+- **The real design problem, and how it's solved without reimplementing
+  pandas' own logic**: a GroupBy object can't be chunked by row range
+  the way Series/DataFrame can — there's no slicing that preserves
+  grouping semantics. `groupby_parallel.py`'s solution: run the real
+  `func` on every group in worker threads first (the expensive part,
+  genuinely parallel), collecting results in group-iteration order, then
+  replay those precomputed results through a *second*, cheap,
+  single-threaded call to the REAL `GroupBy.apply()` — passing a
+  stand-in function that just returns each precomputed result in turn
+  instead of recomputing it. That second pass is what actually produces
+  pandas' exact result shape (scalar-per-group → Series, DataFrame-per-
+  group → concatenated with group keys as an index level, respecting
+  `group_keys`/`as_index`/`sort`/`dropna`, whichever pandas version is
+  running) — with zero custom reimplementation of that combination logic,
+  and therefore zero risk of it drifting from a given pandas version's
+  own rules. Both passes iterate the *same* already-constructed groupby
+  object, so they visit the same groups in the same order deterministically
+  (the grouper is computed once and cached on the object, not re-derived
+  per iteration) — confirmed empirically, not just assumed, since a
+  divergence here would silently scramble per-group values in a way
+  `pd.testing.assert_series_equal`/`assert_frame_equal` would catch
+  immediately, and the test suite exercises multiple result shapes.
+- **`include_groups` is the one case this declines outright rather than
+  risk being wrong**: `DataFrameGroupBy.apply(func, include_groups=False)`
+  strips the grouping columns from each group before `func` ever sees
+  it — but plain iteration over the groupby object (which the threaded
+  pre-pass relies on to get each group) does *not* do that stripping.
+  Rather than reimplement pandas' own column-stripping rule (which is
+  version-dependent and easy to get subtly wrong), this tier just checks
+  for `include_groups` in kwargs and returns `None` immediately if
+  present, regardless of its value — the caller falls back to plain
+  serial `GroupBy.apply()`, which handles it correctly with zero risk.
+  Same "decline entirely rather than partially reimplement" principle
+  the numeric/row-wise native tiers already apply to extra args/kwargs.
+- Sample-measured, not assumed, same as P3: `MIN_GROUPS=20` below which
+  the two timing passes' own overhead isn't worth paying; `SAMPLE_GROUPS
+  =8` groups timed serially vs. threaded; `MIN_SPEEDUP=1.5` gate reused
+  at the same value P3 was raised to. `engine="native"` still never
+  reaches this tier — it keeps raising unconditionally, since threaded
+  parallelism isn't what "native" means anywhere else in this codebase
+  (that word is reserved for the Rust-backed computation, which still
+  doesn't exist for GroupBy).
+- Tests (`tests/test_groupby_parallel.py`): equivalence for both
+  `DataFrameGroupBy` and `SeriesGroupBy` with a genuinely GIL-releasing
+  callable, scalar/Series/DataFrame-shaped per-group results, multi-key
+  `groupby(..., dropna=False)` matching the real call site again, extra
+  positional/keyword argument passthrough, real multi-thread engagement
+  proof (recording thread idents, same retry-against-timing-noise
+  approach as `test_parallel.py`), the `include_groups` decline
+  specifically (and that `engine="auto"` still falls back correctly
+  through plain pandas when it declines), `MIN_GROUPS` and func-raises
+  eligibility declines, verbose output, and that neither
+  `engine="pandas"` nor `engine="native"` ever reaches the parallel tier
+  at all (monkeypatched to assert-fail if called). Full suite: 158/158
+  passing.
+- One real bug caught while writing these tests, not by inspection: two
+  early thread-engagement tests passed `include_groups=False` while also
+  asserting real threading occurred — impossible by this tier's own
+  design, since that kwarg is exactly what makes it decline. Fixed by
+  removing `include_groups` from those two specific tests (the decline
+  behavior itself has its own dedicated tests); every other test keeps
+  it, matching how the real call site actually uses it.
+
+**Deliverable:** `.groupby(...).turboply(func)` under `engine="auto"`
+now actually attempts real acceleration via threading before falling
+back to plain pandas, for any GIL-releasing custom callable — not just
+the narrow aggregation-shaped functions a pattern detector would have
+required. Still no *native* (Rust) GroupBy path; `engine="native"` still
+always raises. A P2-style aggregation-pattern detector (recognizing
+`lambda g: g['col'].sum()`-shaped callables specifically) remains a
+plausible future addition, layered as an earlier tier ahead of this one,
+not attempted here since it wouldn't have helped the function that
+prompted this phase.

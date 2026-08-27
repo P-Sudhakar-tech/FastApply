@@ -50,19 +50,23 @@ none of the other tiers do a single-threaded row-by-row loop, so there's
 no equivalent per-row progress to report for them.
 
 `.turboply` on the result of `.groupby(...)` (DataFrameGroupBy or
-SeriesGroupBy — see TurboplyGroupByAccessor below) is a correctness-only
-passthrough to `GroupBy.apply()`: no native fast path exists for it yet,
-so `engine="auto"`/`"pandas"` both always use plain pandas and
-`engine="native"` raises. pandas has no `register_*_groupby_accessor`
-the way it does for Series/DataFrame/Index, so this attaches the
-accessor descriptor directly to the GroupBy classes instead.
+SeriesGroupBy — see TurboplyGroupByAccessor below) has no native fast
+path (there's no vectorized computation to hand off to — an arbitrary
+per-group callable stays an arbitrary callable), so `engine="native"`
+always raises. `engine="auto"`/default tries a threaded parallel
+fallback (groupby_parallel.py) — same measured-not-assumed approach as
+parallel.py, chunked by group instead of row range — before falling
+back to plain `GroupBy.apply()`. pandas has no
+`register_*_groupby_accessor` the way it does for Series/DataFrame/
+Index, so this attaches the accessor descriptor directly to the
+GroupBy classes instead.
 """
 
 import sys
 
 import pandas as pd
 
-from . import decide, decide_row, decide_str, parallel
+from . import decide, decide_row, decide_str, groupby_parallel, parallel
 from .progress import with_progress
 from .str_accessor import TurboplyStrAccessor
 
@@ -121,13 +125,13 @@ def _decide_series(series, func, engine):
     return decision
 
 
-def _parallel_decision_log(verbose, label, result):
+def _parallel_decision_log(verbose, label, result, sample_size=parallel.SAMPLE_ROWS, unit="rows", speedup=parallel.MIN_SPEEDUP):
     if result is not None:
         _log(
             verbose,
             label,
             "threaded-parallel",
-            f"sample of {parallel.SAMPLE_ROWS} rows measured >= {parallel.MIN_SPEEDUP}x faster threaded than serial",
+            f"sample of {sample_size} {unit} measured >= {speedup}x faster threaded than serial",
         )
 
 
@@ -242,14 +246,21 @@ class TurboplyGroupByAccessor:
     (whether func receives a sub-DataFrame or sub-Series per group) is
     entirely pandas' own concern, not this accessor's.
 
-    No native fast path exists for GroupBy yet — this always delegates to
-    plain GroupBy.apply(), so it's correctness-equivalent to it by
-    construction (the same starting point every other accelerated tier in
-    this project began from, per decide.py's docstring, before any native
-    path was trusted to slot in behind it). `engine="native"` raises
-    rather than silently running the (currently nonexistent) fast path,
-    the same reason-carrying error the Series/DataFrame accessors raise
-    for their own ineligible cases."""
+    No native (Rust) fast path exists for GroupBy — there's no
+    vectorized computation to hand off to for an arbitrary per-group
+    callable, unlike the numeric/row-wise tiers. `engine="native"`
+    raises rather than silently running something else, the same
+    reason-carrying error the Series/DataFrame accessors raise for their
+    own ineligible cases.
+
+    `engine="auto"` (default) does try groupby_parallel.py's threaded
+    fallback first — same measured-not-assumed approach as parallel.py's
+    Series/DataFrame tier, just chunked by group instead of row range —
+    before falling back to plain GroupBy.apply(). That fallback declines
+    outright (never engages) whenever `include_groups` is passed, since
+    correctly replicating pandas' own column-stripping rule for that
+    kwarg isn't worth the risk of getting it subtly wrong; plain
+    GroupBy.apply() handles it directly with zero risk in that case."""
 
     def __init__(self, groupby_obj):
         self._obj = groupby_obj
@@ -258,7 +269,25 @@ class TurboplyGroupByAccessor:
         _check_engine(engine)
         if engine == "native":
             raise ValueError("engine='native' requested but not eligible: no native GroupBy fast path implemented yet")
-        reason = "engine='pandas' forced" if engine == "pandas" else "no native GroupBy fast path implemented yet"
+
+        if engine != "pandas":
+            parallel_result = groupby_parallel.try_parallel_fallback(self._obj, func, args, kwargs)
+            _parallel_decision_log(
+                verbose,
+                "groupby",
+                parallel_result,
+                sample_size=groupby_parallel.SAMPLE_GROUPS,
+                unit="groups",
+                speedup=groupby_parallel.MIN_SPEEDUP,
+            )
+            if parallel_result is not None:
+                return parallel_result
+
+        reason = (
+            "engine='pandas' forced"
+            if engine == "pandas"
+            else "no native GroupBy fast path implemented yet, and threaded fallback wasn't faster (or didn't qualify)"
+        )
         _log(verbose, "groupby", "pandas", reason)
 
         if progress_bar:
