@@ -189,7 +189,17 @@ equivalent to pandas, 100% fallback. 12/12 tests passing.
   `x=0.0` and `x=1.0` to guess an affine form, then verify the guess
   against a real sample (`decide.MIN_ROWS=50` rows minimum, 12-value
   sample) drawn from the actual Series — anything that doesn't match
-  (branches, `x**2`, non-numeric output, ...) safely falls back
+  (branches, `x**2`, non-numeric output, ...) safely falls back.
+  `MIN_ROWS` (same in `decide_row.py` for the row-wise path) is an
+  `engine="auto"` profitability heuristic only, not a correctness
+  requirement — below it, the native call's fixed overhead costs more
+  than plain pandas is worth skipping to. `decide()`'s
+  `enforce_min_rows=False` (used only when the caller explicitly
+  requests `engine="native"`) bypasses it, since an explicit request
+  means "give me the fast path regardless of whether it's worth it" —
+  found and fixed after a real user report that read as "`engine`
+  doesn't work," which turned out to be `engine="native"` correctly but
+  confusingly declining on small (including single-row) data.
 - Sequential vs. rayon-parallel split inside the Rust fns at
   `PARALLEL_THRESHOLD=50_000` elements — below that, rayon's work-splitting
   overhead costs more than it saves, so a plain loop wins; this is what

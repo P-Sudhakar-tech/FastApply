@@ -107,7 +107,7 @@ def _decide_series(series, func, engine):
     explicit override — the caller is asking for the compiled path
     regardless — so it still tries decide_str, correctness-verified as
     always, just without an implied performance promise. See claude.md."""
-    decision = decide.decide(series, func)
+    decision = decide.decide(series, func, enforce_min_rows=(engine != "native"))
     if decision.result is not None:
         return decision
     if engine != "native":
@@ -186,7 +186,7 @@ class TurboplyDataFrameAccessor:
         is_row_wise = axis in (1, "columns")
 
         if engine != "pandas" and is_row_wise and no_extra_args:
-            decision = decide_row.decide(df, func)
+            decision = decide_row.decide(df, func, enforce_min_rows=(engine != "native"))
             _log(verbose, "dataframe", decision.engine, decision.reason)
             if decision.result is not None:
                 return decision.result

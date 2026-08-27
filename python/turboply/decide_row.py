@@ -67,9 +67,18 @@ def _pandas_row_would_be_int(df, used_columns):
     return all(pd.api.types.is_integer_dtype(df[col].dtype) for col in used_columns)
 
 
-def decide(df, func):
-    """Return a Decision for df.apply(func, axis=1)."""
-    if len(df) < MIN_ROWS:
+def decide(df, func, *, enforce_min_rows=True):
+    """Return a Decision for df.apply(func, axis=1).
+
+    `enforce_min_rows=False` (used by the accessor only when the caller
+    explicitly requested `engine="native"`) skips the MIN_ROWS decline —
+    same rationale as decide.py's equivalent parameter: it's a pure
+    engine="auto" profitability heuristic, not a correctness requirement.
+    Column probing doesn't depend on row count at all (it evaluates func
+    on synthetic probe rows, never real data rows), and the sample
+    verification below degrades cleanly to a no-op for zero real rows
+    rather than misbehaving."""
+    if enforce_min_rows and len(df) < MIN_ROWS:
         return Decision(None, "pandas", f"dataframe has {len(df)} rows, needs >= {MIN_ROWS}")
     if df.shape[1] == 0:
         return Decision(None, "pandas", "no columns")

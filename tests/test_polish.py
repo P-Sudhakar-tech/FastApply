@@ -46,10 +46,24 @@ def test_engine_native_raises_when_not_eligible_non_affine():
         s.turboply(lambda x: x**2, engine="native")
 
 
-def test_engine_native_raises_when_series_too_small():
+def test_engine_native_succeeds_on_small_series():
+    # MIN_ROWS is an engine="auto" profitability heuristic (below it, the
+    # native call's fixed overhead isn't worth it), not a correctness
+    # requirement — an explicit engine="native" request bypasses it and
+    # still gets a correct, verified native result.
     s = pd.Series(range(10))
-    with pytest.raises(ValueError, match="not eligible"):
-        s.turboply(lambda x: x * 2, engine="native")
+    expected = s.apply(lambda x: x * 2)
+    result = s.turboply(lambda x: x * 2, engine="native")
+    pd.testing.assert_series_equal(result, expected)
+
+
+def test_engine_auto_still_declines_small_series(capsys):
+    # The bypass above is engine="native"-only; engine="auto" must keep
+    # using MIN_ROWS to skip the fast path on small data.
+    s = pd.Series(range(10))
+    result = s.turboply(lambda x: x * 2, verbose=True)
+    pd.testing.assert_series_equal(result, s.apply(lambda x: x * 2))
+    assert "needs >= 50" in capsys.readouterr().err
 
 
 def test_engine_native_raises_on_dataframe_axis0():
@@ -70,10 +84,20 @@ def test_engine_native_succeeds_on_large_row_wise_dataframe():
     pd.testing.assert_series_equal(result, expected)
 
 
-def test_engine_native_raises_on_small_row_wise_dataframe():
+def test_engine_native_succeeds_on_small_row_wise_dataframe():
+    # Same MIN_ROWS-is-a-profitability-heuristic reasoning as the Series
+    # case above, for the row-wise DataFrame path.
     df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
-    with pytest.raises(ValueError, match="not eligible"):
-        df.turboply(lambda row: row["a"] + row["b"], axis=1, engine="native")
+    expected = df.apply(lambda row: row["a"] + row["b"], axis=1)
+    result = df.turboply(lambda row: row["a"] + row["b"], axis=1, engine="native")
+    pd.testing.assert_series_equal(result, expected)
+
+
+def test_engine_auto_still_declines_small_row_wise_dataframe(capsys):
+    df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+    result = df.turboply(lambda row: row["a"] + row["b"], axis=1, verbose=True)
+    pd.testing.assert_series_equal(result, df.apply(lambda row: row["a"] + row["b"], axis=1))
+    assert "needs >= 50" in capsys.readouterr().err
 
 
 def test_engine_native_raises_with_extra_args():

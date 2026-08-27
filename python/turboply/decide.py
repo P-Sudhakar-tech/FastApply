@@ -73,9 +73,22 @@ def _restore_dtype(out, series):
     return result
 
 
-def decide(series, func):
-    """Run the fast-path eligibility check once and return a Decision."""
-    if len(series) < MIN_ROWS:
+def decide(series, func, *, enforce_min_rows=True):
+    """Run the fast-path eligibility check once and return a Decision.
+
+    `enforce_min_rows=False` (used by the accessor only when the caller
+    explicitly requested `engine="native"`) skips the MIN_ROWS decline.
+    MIN_ROWS exists purely as an `engine="auto"` profitability heuristic —
+    below it, the native call's fixed overhead costs more than plain
+    pandas on that little data — not a correctness requirement: the
+    sample-verification and native computation below are both exact
+    regardless of row count (verified down to a single row and to zero
+    rows, where the empty-sample check further down declines cleanly on
+    its own). An explicit engine="native" request means the caller wants
+    the fast path regardless of whether it's worth it, same as
+    engine="native" already overrides decide_str's separate engine="auto"
+    exclusion elsewhere in this accessor."""
+    if enforce_min_rows and len(series) < MIN_ROWS:
         return Decision(None, "pandas", f"series has {len(series)} rows, needs >= {MIN_ROWS}")
     if not pd.api.types.is_numeric_dtype(series.dtype):
         return Decision(None, "pandas", f"dtype {series.dtype} is not numeric")
