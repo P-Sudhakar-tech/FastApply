@@ -77,10 +77,14 @@ names.turboply.str.contains(r"^GRACE$")
 # .groupby(...).apply(func) with the same engine/verbose/progress_bar
 # options as everything else. engine="auto" tries a threaded parallel
 # fallback first (measured, not assumed — same approach as the
-# GIL-releasing-callable case above, just chunked by group), then falls
-# back to plain pandas. There's no *native* (Rust) GroupBy path though,
-# so engine="native" raises rather than pretending to accelerate
-# something that doesn't exist yet.
+# GIL-releasing-callable case above, just chunked by group), for
+# GroupBy objects with at least 800 groups — a real, ~2x+ speedup for
+# GIL-releasing callables, verified never to regress a CPU-bound one
+# even at that scale (see claude.md's P9 section for why the threshold
+# is that high). Below that it falls back to plain pandas immediately,
+# no measurement overhead paid. There's no *native* (Rust) GroupBy path
+# though, so engine="native" raises rather than pretending to
+# accelerate something that doesn't exist yet.
 df.groupby("a").turboply(lambda g: g["b"].sum())
 ```
 

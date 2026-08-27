@@ -547,10 +547,11 @@ half of the same request.
   serial `GroupBy.apply()`, which handles it correctly with zero risk.
   Same "decline entirely rather than partially reimplement" principle
   the numeric/row-wise native tiers already apply to extra args/kwargs.
-- Sample-measured, not assumed, same as P3: `MIN_GROUPS=20` below which
-  the two timing passes' own overhead isn't worth paying; `SAMPLE_GROUPS
-  =8` groups timed serially vs. threaded; `MIN_SPEEDUP=1.5` gate reused
-  at the same value P3 was raised to. `engine="native"` still never
+- Sample-measured, not assumed, same as P3: `SAMPLE_GROUPS=8` groups
+  timed serially vs. threaded; `MIN_SPEEDUP=1.5` gate reused at the same
+  value P3 was raised to; `MIN_GROUPS=800` — see the third bug below for
+  why that number is so much higher than it might look like it needs to
+  be. `engine="native"` still never
   reaches this tier — it keeps raising unconditionally, since threaded
   parallelism isn't what "native" means anywhere else in this codebase
   (that word is reserved for the Rust-backed computation, which still
@@ -566,7 +567,10 @@ half of the same request.
   through plain pandas when it declines), `MIN_GROUPS` and func-raises
   eligibility declines, verbose output, and that neither
   `engine="pandas"` nor `engine="native"` ever reaches the parallel tier
-  at all (monkeypatched to assert-fail if called). Full suite: 158/158
+  at all (monkeypatched to assert-fail if called), and (added after the
+  MIN_GROUPS=800 fix below) a dedicated regression test that directly
+  calls `try_parallel_fallback` 20 times on the exact adversarial shape
+  that regressed and asserts it never engages. Full suite: 159/159
   passing.
 - One real bug caught while writing these tests, not by inspection: two
   early thread-engagement tests passed `include_groups=False` while also
@@ -594,6 +598,67 @@ half of the same request.
   benchmark script itself also had the *same* `include_groups=False`
   mistake as the two tests above on its first draft — caught and fixed
   the same way, in every one of its three cases.
+- **A third bug, more consequential than either of the first two, found
+  only by benchmarking the full (group-count × rows-per-group) matrix
+  rather than one scenario at a time**: with the executor fix in place,
+  a single (serial, threaded) sample-timing pair turned out to be
+  genuinely, severely noisy — a CPU-bound (GIL-held) callable
+  occasionally read a false "2.58x speedup" from pure OS timing jitter,
+  and committing the full run on that one bad reading caused a real
+  ~3x wall-clock *regression* (paying full serial-equivalent cost via
+  the threaded pre-pass, which never actually parallelizes under the
+  GIL, plus the replay pass on top, for zero benefit). A median across
+  repeated measurements was tried first and still let roughly 1 in 8
+  false positives through in a 40-trial sweep — not good enough, since
+  the cost of a false positive here is severe, not just "no gain."
+  Switching to a *unanimous* requirement (every one of `_SAMPLE_REPEATS
+  =5` repeats must individually clear `MIN_SPEEDUP`, not just their
+  median) measured 0/40 false positives on the same adversarial shape,
+  while still catching 19/20 genuine GIL-releasing wins — the two
+  failure modes look different up close: a genuine win shows consistent
+  speedup across repeats, while a GIL-bound false positive typically
+  shows a mix of high and low readings in the same trial, which a
+  median can still average into a passing score but unanimity correctly
+  rejects.
+
+  That fix on its own then surfaced a *fourth*, related problem, caught
+  by re-benchmarking the full matrix again rather than declaring victory
+  after one adversarial case passed: the unanimous check ran all 5
+  repeats unconditionally before ever checking whether the sample was
+  even fast enough to trust, so for a callable with tiny real per-group
+  cost, the *decline* path itself paid the full repeated-measurement tax
+  and that alone regressed an otherwise-fast job. Fixed by probing with
+  one cheap serial-only sample run first and bailing out immediately
+  if it's already too fast to measure reliably, never even starting the
+  threaded comparison.
+
+  Even after both fixes, benchmarking across group counts *and*
+  rows-per-group (1 to 1000) together — the exact two-dimensional
+  request that prompted this — turned up one more finding, not a bug
+  this time but an inescapable property of the design: the fixed
+  measurement cost (`SAMPLE_GROUPS * (1 + 2 * _SAMPLE_REPEATS)` group-
+  equivalent evaluations, paid on every call, win or lose) is a *pure
+  function of the sampling protocol's own parameters* — it does not
+  depend on what `func` actually costs per group, because that per-group
+  cost cancels out of the measurement-cost-to-job-cost ratio (confirmed
+  empirically: the same ratio held for a cheap GIL-releasing callable
+  and an expensive CPU-bound one at matched `n_groups`). That means
+  `MIN_GROUPS` is the *only* lever available to keep this fixed tax a
+  small fraction of any real job, regardless of how expensive or cheap
+  each group's work turns out to be — and at the originally-chosen
+  `MIN_GROUPS=150`, that tax was still large enough to regress CPU-bound
+  callables with substantial per-group cost down to 0.42x, even though
+  the parallelize/decline *decision* itself was correct every time.
+  Raised to `MIN_GROUPS=800` — the smallest group count in the full
+  matrix scan where CPU-bound callables landed consistently at ~0.94-
+  0.99x (no real regression, confirmed with extra repeats where a
+  reading looked borderline) across every rows-per-group tested, while
+  GIL-releasing callables still measured a strong, real 2.0-2.3x speedup
+  at that same scale and beyond. The real, honest cost of this chain of
+  fixes: the tier now only engages for larger GroupBy workloads than
+  originally hoped, in exchange for the "never worse than plain pandas"
+  guarantee actually holding across the full parameter space tested,
+  not just the one scenario checked first.
 
 **Deliverable:** `.groupby(...).turboply(func)` under `engine="auto"`
 now actually attempts real acceleration via threading before falling

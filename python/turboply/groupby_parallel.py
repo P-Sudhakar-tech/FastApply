@@ -37,11 +37,39 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-MIN_GROUPS = 20
+MIN_GROUPS = 800
 SAMPLE_GROUPS = 8
 MIN_SPEEDUP = 1.5
 _MIN_MEASURABLE_TIME = 0.001
 _MAX_WORKERS = min(32, os.cpu_count() or 4)
+_SAMPLE_REPEATS = 5
+
+# Why MIN_GROUPS is 800, not a smaller "feels reasonable" number: the
+# unanimous-across-repeats check below needs _SAMPLE_REPEATS independent
+# (serial, threaded) measurements to reliably tell a genuine GIL-releasing
+# speedup apart from timing noise (see the comment on that check). That
+# means every call -- even one that correctly ends up declining -- pays a
+# fixed cost of roughly SAMPLE_GROUPS * (1 + 2 * _SAMPLE_REPEATS) group-
+# equivalent evaluations for measurement alone. Critically, this fixed
+# cost is a *pure function of SAMPLE_GROUPS and _SAMPLE_REPEATS* -- it
+# does NOT depend on what func actually costs per group, because that
+# per-group cost cancels out of the measurement-cost-to-job-cost ratio
+# (confirmed empirically, not just algebraically: measured the same
+# ratio for a cheap GIL-releasing callable and an expensive CPU-bound one
+# at the same n_groups). So MIN_GROUPS is the only lever that controls
+# this overhead, and it has to be large enough that this fixed
+# measurement tax is a small fraction of ANY real job, regardless of how
+# expensive or cheap each group's real work turns out to be. Verified
+# directly: at MIN_GROUPS=150, examples/benchmark_groupby.py's full
+# scan (varying both group count and rows-per-group) still showed real
+# regressions (down to 0.42x) for CPU-bound callables with substantial
+# per-group cost, even though the parallelize/decline *decision* itself
+# was correct -- the decline path's own fixed measurement overhead was
+# the regression. 800 was the smallest group count in that same scan
+# where CPU-bound callables landed consistently at ~0.94-0.99x (no real
+# regression) across every rows-per-group tested (1 to 1000), while
+# genuinely GIL-releasing callables still measured a strong, real
+# 2.0-2.3x speedup at that same scale and beyond.
 
 # A fresh ThreadPoolExecutor spawns real OS threads on every construction,
 # and on Windows that cost (observed several ms) is easily larger than the
@@ -104,15 +132,52 @@ def try_parallel_fallback(groupby_obj, func, args, kwargs):
     if not sample:
         return None
 
+    # A single (serial, threaded) timing pair is genuinely, and severely,
+    # noisy at this scale -- a benchmark run (examples/benchmark_groupby.py)
+    # caught a real ~3x regression on a CPU-bound (GIL-held) callable: a
+    # single noisy sample measurement read as a false "2.58x speedup," and
+    # committing the full run on that one bad reading meant paying full
+    # serial cost PLUS threading/replay overhead for a workload that never
+    # actually parallelizes under the GIL. A *median* across repeated
+    # measurements was tried first and still let ~1 in 8 false positives
+    # through empirically (40-trial sweep) -- not good enough, since the
+    # cost of a false positive here is severe, not just "no gain". What
+    # actually drove false positives to 0/40 in that same sweep (while
+    # still catching 19/20 genuine GIL-releasing wins) is a *unanimous*
+    # requirement: every one of _SAMPLE_REPEATS repeats must individually
+    # clear MIN_SPEEDUP. A genuinely GIL-releasing callable shows
+    # consistent speedup across repeats; a GIL-bound false positive
+    # typically shows a mix of high and low readings in the same trial
+    # (confirmed by inspecting the actual failing trials), which a median
+    # can still average into a passing score but unanimity correctly
+    # rejects.
+    #
+    # A second real bug, found the same way (benchmarking the full matrix,
+    # not just one adversarial case): the unanimous check above still ran
+    # every one of _SAMPLE_REPEATS (serial, threaded) pairs unconditionally
+    # before ever checking _MIN_MEASURABLE_TIME -- so for a callable whose
+    # real per-group cost is tiny (e.g. a 1-row group with a trivial
+    # numeric loop), the *decline* path itself paid the full repeated
+    # measurement cost first, and that alone was enough to regress a
+    # genuinely fast job. Fixed by probing with a single cheap serial-only
+    # sample run first and bailing out immediately if it's already too
+    # fast to trust -- never even starting the threaded comparison, let
+    # alone repeating it -- so the decline path stays cheap for cheap
+    # workloads regardless of group count.
     try:
-        t_serial = _time_once(lambda: _run_serial(sample, func, args, kwargs))
-        if t_serial < _MIN_MEASURABLE_TIME:
+        t_serial_probe = _time_once(lambda: _run_serial(sample, func, args, kwargs))
+        if t_serial_probe < _MIN_MEASURABLE_TIME:
             return None
-        t_parallel = _time_once(lambda: _run_threaded(sample, func, args, kwargs))
+
+        speedups = []
+        for _ in range(_SAMPLE_REPEATS):
+            t_serial = _time_once(lambda: _run_serial(sample, func, args, kwargs))
+            t_parallel = _time_once(lambda: _run_threaded(sample, func, args, kwargs))
+            speedups.append(t_serial / t_parallel if t_parallel > 0 else 0.0)
     except Exception:
         return None
 
-    if t_parallel <= 0 or t_serial / t_parallel < MIN_SPEEDUP:
+    if any(s < MIN_SPEEDUP for s in speedups):
         return None
 
     try:

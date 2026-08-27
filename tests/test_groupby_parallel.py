@@ -79,6 +79,35 @@ def test_cpu_bound_func_still_correct_even_if_not_parallelized():
     pd.testing.assert_series_equal(result, expected)
 
 
+def test_cpu_bound_large_groups_never_falsely_engages_parallel_tier():
+    """Regression test for a real bug found via examples/benchmark_groupby.py:
+    with large-ish groups (many rows each), the sample-timing race for a
+    CPU-bound (GIL-held) callable occasionally read a false "speedup" from
+    pure measurement noise, and committing the full run on that one bad
+    reading caused an actual ~3x wall-clock regression vs plain pandas (the
+    threaded pre-pass never benefits under the GIL, but still pays full
+    serial-equivalent cost plus threading/replay overhead on top). A single
+    timing pair, and even a median across repeats, both let this through in
+    a 40-trial empirical sweep; a unanimous requirement (every sample
+    repeat must individually clear MIN_SPEEDUP) measured 0/40 false
+    positives on the same adversarial shape reproduced here. Run this
+    shape's eligibility check many times directly (cheap — declining is
+    fast) to catch any regression in that guarantee."""
+    n_groups = groupby_parallel.MIN_GROUPS
+    rows_per_group = 1000
+    df = pd.DataFrame(
+        {
+            "key": np.repeat(np.arange(n_groups), rows_per_group),
+            "value": np.arange(n_groups * rows_per_group),
+        }
+    )
+    grouped = df.groupby("key")
+
+    for _ in range(20):
+        result = groupby_parallel.try_parallel_fallback(grouped, _cpu_bound_sum, (), {})
+        assert result is None, "CPU-bound callable on large groups must never falsely engage the parallel tier"
+
+
 def test_parallel_fallback_matches_pandas_for_seriesgroupby():
     df = _df()
     grouped = df["value"].groupby(df["key"])

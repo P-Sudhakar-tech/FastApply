@@ -26,10 +26,12 @@ import pandas as pd
 
 import turboply  # noqa: F401  (registers the .turboply accessor)
 
-N_GROUPS = 200
+N_GROUPS = 1000  # comfortably above groupby_parallel.MIN_GROUPS (800) --
+# below that threshold the parallel tier declines immediately (by
+# design, see groupby_parallel.py) so there's nothing to demonstrate.
 ROWS_PER_GROUP = 5
-N_REPEATS = 15
-N_WARMUP = 3
+N_REPEATS = 8
+N_WARMUP = 2
 
 
 def timed(fn, repeats=N_REPEATS, warmup=N_WARMUP):
