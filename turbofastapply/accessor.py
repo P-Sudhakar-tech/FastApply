@@ -5,10 +5,10 @@ pandas-equivalent fallback for everything else — plus Phase 6 UX polish:
 engine selection, verbose routing explanations, and an optional progress
 bar for whichever path ends up doing a row-by-row Python loop.
 
-The accessor is directly callable — `s.turboply(func)` — instead of
+The accessor is directly callable — `s.turbofastapply(func)` — instead of
 requiring the `.apply()` method name. `.apply()` is kept as an alias for
 readers coming from `pandas.apply()`, but the direct-call form is the
-primary, documented API. `s.turboply.str.contains(pattern)` /
+primary, documented API. `s.turbofastapply.str.contains(pattern)` /
 `.replace(pattern, repl)` mirror pandas' own `.str` accessor for the two
 regex ops that need arguments a lambda-probing approach can't safely
 recover (see str_accessor.py).
@@ -28,7 +28,7 @@ str.upper/.lower/.strip, verified on a sample) is deliberately NOT in the
 more than CPython's already-fast built-in string methods save — unlike
 the numeric path's genuine zero-copy numpy view). It's only reachable via
 `engine="native"` (an explicit override, correctness-verified as always
-but without an implied speed promise) or `.turboply.str.contains()`/
+but without an implied speed promise) or `.turbofastapply.str.contains()`/
 `.replace()` (str_accessor.py), which the same caveat applies to.
 
 DataFrame row-wise (axis=1) tries the same shape, with tier 1 being
@@ -49,8 +49,8 @@ tiers 3-4.
 none of the other tiers do a single-threaded row-by-row loop, so there's
 no equivalent per-row progress to report for them.
 
-`.turboply` on the result of `.groupby(...)` (DataFrameGroupBy or
-SeriesGroupBy — see TurboplyGroupByAccessor below) has no native fast
+`.turbofastapply` on the result of `.groupby(...)` (DataFrameGroupBy or
+SeriesGroupBy — see TurboFastApplyGroupByAccessor below) has no native fast
 path (there's no vectorized computation to hand off to — an arbitrary
 per-group callable stays an arbitrary callable), so `engine="native"`
 always raises. `engine="auto"`/default tries a threaded parallel
@@ -68,7 +68,7 @@ import pandas as pd
 
 from . import decide, decide_row, decide_str, groupby_parallel, parallel
 from .progress import with_progress
-from .str_accessor import TurboplyStrAccessor
+from .str_accessor import TurboFastApplyStrAccessor
 
 try:
     # The long-lived internal path; pandas.api.typing (a public alias for
@@ -88,7 +88,7 @@ def _check_engine(engine):
 
 def _log(verbose, label, engine, reason):
     if verbose:
-        print(f"[turboply] {label}: engine={engine} - {reason}", file=sys.stderr)
+        print(f"[turbofastapply] {label}: engine={engine} - {reason}", file=sys.stderr)
 
 
 def _decide_series(series, func, engine):
@@ -135,14 +135,14 @@ def _parallel_decision_log(verbose, label, result, sample_size=parallel.SAMPLE_R
         )
 
 
-@pd.api.extensions.register_series_accessor("turboply")
-class TurboplySeriesAccessor:
+@pd.api.extensions.register_series_accessor("turbofastapply")
+class TurboFastApplySeriesAccessor:
     def __init__(self, pandas_obj):
         self._obj = pandas_obj
 
     @property
     def str(self):
-        return TurboplyStrAccessor(self._obj)
+        return TurboFastApplyStrAccessor(self._obj)
 
     def __call__(self, func, *args, engine="auto", verbose=False, progress_bar=False, **kwargs):
         _check_engine(engine)
@@ -172,14 +172,14 @@ class TurboplySeriesAccessor:
             _log(verbose, "series", "pandas", reason)
 
         if progress_bar:
-            func = with_progress(func, total=len(series), label="turboply")
+            func = with_progress(func, total=len(series), label="turbofastapply")
         return series.apply(func, *args, **kwargs)
 
     apply = __call__
 
 
-@pd.api.extensions.register_dataframe_accessor("turboply")
-class TurboplyDataFrameAccessor:
+@pd.api.extensions.register_dataframe_accessor("turbofastapply")
+class TurboFastApplyDataFrameAccessor:
     def __init__(self, pandas_obj):
         self._obj = pandas_obj
 
@@ -210,7 +210,7 @@ class TurboplyDataFrameAccessor:
 
         if progress_bar:
             total = len(df) if is_row_wise else len(df.columns)
-            func = with_progress(func, total=total, label="turboply")
+            func = with_progress(func, total=total, label="turbofastapply")
         return df.apply(func, *args, axis=axis, **kwargs)
 
     apply = __call__
@@ -239,8 +239,8 @@ class _CachedGroupByAccessor:
         return accessor_obj
 
 
-class TurboplyGroupByAccessor:
-    """`.turboply` on the result of `.groupby(...)` — DataFrameGroupBy or
+class TurboFastApplyGroupByAccessor:
+    """`.turbofastapply` on the result of `.groupby(...)` — DataFrameGroupBy or
     SeriesGroupBy alike, since both just need `.apply(func, *args,
     **kwargs)` delegated through unchanged; what differs between them
     (whether func receives a sub-DataFrame or sub-Series per group) is
@@ -291,11 +291,11 @@ class TurboplyGroupByAccessor:
         _log(verbose, "groupby", "pandas", reason)
 
         if progress_bar:
-            func = with_progress(func, total=self._obj.ngroups, label="turboply")
+            func = with_progress(func, total=self._obj.ngroups, label="turbofastapply")
         return self._obj.apply(func, *args, **kwargs)
 
     apply = __call__
 
 
-DataFrameGroupBy.turboply = _CachedGroupByAccessor("turboply", TurboplyGroupByAccessor)
-SeriesGroupBy.turboply = _CachedGroupByAccessor("turboply", TurboplyGroupByAccessor)
+DataFrameGroupBy.turbofastapply = _CachedGroupByAccessor("turbofastapply", TurboFastApplyGroupByAccessor)
+SeriesGroupBy.turbofastapply = _CachedGroupByAccessor("turbofastapply", TurboFastApplyGroupByAccessor)

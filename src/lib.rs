@@ -75,7 +75,7 @@ fn str_strip(py: Python<'_>, items: Vec<String>) -> Vec<String> {
 }
 
 /// Elementwise regex search over a list of strings: does `pattern` match
-/// anywhere in each string? Backs `.turboply.str.contains(pattern)`.
+/// anywhere in each string? Backs `.turbofastapply.str.contains(pattern)`.
 #[pyfunction]
 fn str_contains(py: Python<'_>, items: Vec<String>, pattern: String) -> PyResult<Vec<bool>> {
     let re = Regex::new(&pattern).map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -83,7 +83,7 @@ fn str_contains(py: Python<'_>, items: Vec<String>, pattern: String) -> PyResult
 }
 
 /// Elementwise regex replace-all over a list of strings. Backs
-/// `.turboply.str.replace(pattern, repl)`. Rust's `regex` crate has no
+/// `.turbofastapply.str.replace(pattern, repl)`. Rust's `regex` crate has no
 /// backreference support (unlike Python's `re`), so patterns/replacements
 /// relying on that won't compile or won't match Python's behavior here —
 /// the caller (decide_str.py) verifies output against real Python `re`
@@ -130,7 +130,7 @@ fn row_affine_f64<'py>(
 }
 
 #[pymodule]
-fn _turboply(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _turbofastapply(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(affine_f64, m)?)?;
     m.add_function(wrap_pyfunction!(affine_i64, m)?)?;
     m.add_function(wrap_pyfunction!(abs_f64, m)?)?;

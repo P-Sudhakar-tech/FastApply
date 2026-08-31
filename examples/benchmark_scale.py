@@ -1,4 +1,4 @@
-"""Benchmark: plain pandas .apply() vs .turboply() across row counts, to
+"""Benchmark: plain pandas .apply() vs .turbofastapply() across row counts, to
 see whether the native fast paths' speedup holds as data grows and where
 the Rust-side sequential/parallel split (`core::PARALLEL_THRESHOLD =
 50_000` elements) actually kicks in.
@@ -25,7 +25,7 @@ import time
 import numpy as np
 import pandas as pd
 
-import turboply  # noqa: F401  (registers the .turboply accessor)
+import turbofastapply  # noqa: F401  (registers the .turbofastapply accessor)
 
 N_ROWS_LIST = [10_000, 20_000, 30_000, 40_000, 50_000]
 N_WARMUP = 2
@@ -51,11 +51,11 @@ def timed(fn, repeats, warmup=N_WARMUP):
     return times
 
 
-def report(label, n, pandas_times, turboply_times, repeats):
+def report(label, n, pandas_times, turbofastapply_times, repeats):
     p_med = statistics.median(pandas_times) * 1000
-    t_med = statistics.median(turboply_times) * 1000
+    t_med = statistics.median(turbofastapply_times) * 1000
     speedup = p_med / t_med if t_med else float("inf")
-    print(f"  n={n:>6}  pandas={p_med:9.3f} ms  turboply={t_med:9.3f} ms  "
+    print(f"  n={n:>6}  pandas={p_med:9.3f} ms  turbofastapply={t_med:9.3f} ms  "
           f"speedup={speedup:5.2f}x  (median of {repeats})")
     return speedup
 
@@ -74,7 +74,7 @@ def main():
             "",
             n,
             timed(lambda: s.apply(lambda x: x * 2 + 1), repeats),
-            timed(lambda: s.turboply(lambda x: x * 2 + 1), repeats),
+            timed(lambda: s.turbofastapply(lambda x: x * 2 + 1), repeats),
             repeats,
         )
         if crosses:
@@ -94,7 +94,7 @@ def main():
             "",
             n,
             timed(lambda: df.apply(lambda row: row["a"] + row["b"], axis=1), repeats),
-            timed(lambda: df.turboply(lambda row: row["a"] + row["b"], axis=1), repeats),
+            timed(lambda: df.turbofastapply(lambda row: row["a"] + row["b"], axis=1), repeats),
             repeats,
         )
     print()

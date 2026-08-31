@@ -1,4 +1,4 @@
-<title>Turboply Scaling Benchmarks</title>
+<title>TurboFastApply Scaling Benchmarks</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
   :root {
@@ -12,7 +12,7 @@
     --grid: #e1e0d9;
     --baseline: #c3c2b7;
     --border: rgba(11,11,11,0.10);
-    --series-turboply: #2a78d6;
+    --series-turbofastapply: #2a78d6;
     --series-pandas: #eb6834;
     --good: #0ca30c;
     --tooltip-bg: #1a1a19;
@@ -30,7 +30,7 @@
       --grid: #2c2c2a;
       --baseline: #383835;
       --border: rgba(255,255,255,0.10);
-      --series-turboply: #3987e5;
+      --series-turbofastapply: #3987e5;
       --series-pandas: #d95926;
       --good: #0ca30c;
       --tooltip-bg: #fcfcfb;
@@ -48,7 +48,7 @@
     --grid: #2c2c2a;
     --baseline: #383835;
     --border: rgba(255,255,255,0.10);
-    --series-turboply: #3987e5;
+    --series-turbofastapply: #3987e5;
     --series-pandas: #d95926;
     --good: #0ca30c;
     --tooltip-bg: #fcfcfb;
@@ -85,7 +85,7 @@
     font-size: 12.5px;
     letter-spacing: 0.09em;
     text-transform: uppercase;
-    color: var(--series-turboply);
+    color: var(--series-turbofastapply);
     font-weight: 600;
   }
   h1 {
@@ -307,7 +307,7 @@
   }
   footer code { font-family: "IBM Plex Mono", monospace; background: var(--surface-2); padding: 0.1em 0.4em; border-radius: 4px; }
 
-  a { color: var(--series-turboply); }
+  a { color: var(--series-turbofastapply); }
 
   @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; animation: none !important; }
@@ -317,7 +317,7 @@
 <div class="page">
 
   <header class="hero">
-    <div class="eyebrow">Turboply &middot; Performance Report</div>
+    <div class="eyebrow">TurboFastApply &middot; Performance Report</div>
     <h1>The native fast path doesn't just beat <span class="mono">pandas.apply()</span> — it pulls away as data grows</h1>
     <p class="dek">
       Measured on this machine, median of repeated timed runs with warmup. Two cases route through
@@ -352,7 +352,7 @@
     <h2>Execution time by row count</h2>
     <p class="section-note">
       Both axes are log-scaled &mdash; the two lines are 1&ndash;2 orders of magnitude apart, so a linear
-      scale would flatten <span class="mono">turboply</span> into the baseline. Hover any point for exact
+      scale would flatten <span class="mono">turbofastapply</span> into the baseline. Hover any point for exact
       timings.
     </p>
     <div class="chart-grid">
@@ -379,7 +379,7 @@
       as pandas' linear per-row cost keeps growing against a near-flat native cost.
     </p>
     <div class="card">
-      <p class="card-title">Speedup multiplier (pandas time &divide; turboply time)</p>
+      <p class="card-title">Speedup multiplier (pandas time &divide; turbofastapply time)</p>
       <p class="card-sub">log-scaled row count on the x-axis; both cases share one axis, indexed to a common metric</p>
       <div class="chart-wrap" id="chart-speedup" style="height:320px;"></div>
     </div>
@@ -404,7 +404,7 @@
     down as row count grows, since <code>pandas.apply(axis=1)</code> is slow enough at scale that a fixed
     high repeat count would dominate wall time). Numeric case repeats: 30 at 10K down to 3 at 10M.
     Row-wise case repeats: 30 at 10K down to 3 at 500K. Both cases verified correct against plain pandas
-    on every run (turboply's sampling-based verification declines the native path rather than risk a
+    on every run (turbofastapply's sampling-based verification declines the native path rather than risk a
     silent mismatch). Full script: <code>examples/benchmark_scale.py</code>.
   </footer>
 
@@ -417,19 +417,19 @@
   var numeric = {
     n:        [10000, 20000, 30000, 40000, 50000, 100000, 500000, 1000000, 5000000, 10000000],
     pandas:   [4.180, 8.553, 11.277, 14.142, 18.124, 37.435, 182.684, 359.822, 1800.273, 3600.488],
-    turboply: [0.174, 0.207, 0.192, 0.286, 0.608, 1.203, 2.841, 4.959, 24.770, 45.216],
+    turbofastapply: [0.174, 0.207, 0.192, 0.286, 0.608, 1.203, 2.841, 4.959, 24.770, 45.216],
     repeats:  [30, 15, 10, 7, 6, 6, 4, 4, 3, 3]
   };
   var rowwise = {
     n:        [10000, 20000, 30000, 40000, 50000, 100000, 200000, 500000],
     pandas:   [92.724, 177.598, 238.334, 320.342, 407.340, 753.917, 1434.447, 3547.891],
-    turboply: [2.424, 2.608, 3.121, 3.685, 4.704, 8.328, 10.342, 21.435],
+    turbofastapply: [2.424, 2.608, 3.121, 3.685, 4.704, 8.328, 10.342, 21.435],
     repeats:  [30, 15, 10, 7, 6, 4, 3, 3]
   };
-  numeric.speedup = numeric.pandas.map(function (p, i) { return p / numeric.turboply[i]; });
-  rowwise.speedup = rowwise.pandas.map(function (p, i) { return p / rowwise.turboply[i]; });
+  numeric.speedup = numeric.pandas.map(function (p, i) { return p / numeric.turbofastapply[i]; });
+  rowwise.speedup = rowwise.pandas.map(function (p, i) { return p / rowwise.turbofastapply[i]; });
 
-  var COLOR_TURBOPLY = getComputedStyle(document.documentElement).getPropertyValue("--series-turboply").trim();
+  var COLOR_TURBOFASTAPPLY = getComputedStyle(document.documentElement).getPropertyValue("--series-turbofastapply").trim();
   var COLOR_PANDAS = getComputedStyle(document.documentElement).getPropertyValue("--series-pandas").trim();
 
   function fmtN(v) {
@@ -600,7 +600,7 @@
     valueFmt: fmtMs,
     series: [
       { label: "pandas .apply()", color: COLOR_PANDAS, x: numeric.n, y: numeric.pandas },
-      { label: "turboply", color: COLOR_TURBOPLY, x: numeric.n, y: numeric.turboply }
+      { label: "turbofastapply", color: COLOR_TURBOFASTAPPLY, x: numeric.n, y: numeric.turbofastapply }
     ]
   });
 
@@ -614,7 +614,7 @@
     valueFmt: fmtMs,
     series: [
       { label: "pandas .apply(axis=1)", color: COLOR_PANDAS, x: rowwise.n, y: rowwise.pandas },
-      { label: "turboply", color: COLOR_TURBOPLY, x: rowwise.n, y: rowwise.turboply }
+      { label: "turbofastapply", color: COLOR_TURBOFASTAPPLY, x: rowwise.n, y: rowwise.turbofastapply }
     ]
   });
 
@@ -630,7 +630,7 @@
     refX: 50000,
     refLabel: "PARALLEL_THRESHOLD (50K)",
     series: [
-      { label: "row-wise (axis=1)", color: COLOR_TURBOPLY, x: rowwise.n, y: rowwise.speedup },
+      { label: "row-wise (axis=1)", color: COLOR_TURBOFASTAPPLY, x: rowwise.n, y: rowwise.speedup },
       { label: "numeric transform", color: COLOR_PANDAS, x: numeric.n, y: numeric.speedup }
     ]
   });
@@ -654,14 +654,14 @@
   }
   addLegend("chart-numeric", [
     { label: "pandas .apply()", color: COLOR_PANDAS },
-    { label: "turboply", color: COLOR_TURBOPLY }
+    { label: "turbofastapply", color: COLOR_TURBOFASTAPPLY }
   ]);
   addLegend("chart-rowwise", [
     { label: "pandas .apply(axis=1)", color: COLOR_PANDAS },
-    { label: "turboply", color: COLOR_TURBOPLY }
+    { label: "turbofastapply", color: COLOR_TURBOFASTAPPLY }
   ]);
   addLegend("chart-speedup", [
-    { label: "row-wise (axis=1)", color: COLOR_TURBOPLY },
+    { label: "row-wise (axis=1)", color: COLOR_TURBOFASTAPPLY },
     { label: "numeric transform", color: COLOR_PANDAS }
   ]);
 
@@ -669,7 +669,7 @@
   function buildTable(tableId, data) {
     var table = document.getElementById(tableId);
     var thead = document.createElement("thead");
-    thead.innerHTML = "<tr><th>Rows</th><th>Repeats</th><th>pandas</th><th>turboply</th><th>Speedup</th></tr>";
+    thead.innerHTML = "<tr><th>Rows</th><th>Repeats</th><th>pandas</th><th>turbofastapply</th><th>Speedup</th></tr>";
     table.appendChild(thead);
     var tbody = document.createElement("tbody");
     data.n.forEach(function (n, i) {
@@ -678,7 +678,7 @@
         n.toLocaleString(),
         String(data.repeats[i]),
         fmtMs(data.pandas[i]),
-        fmtMs(data.turboply[i]),
+        fmtMs(data.turbofastapply[i]),
         fmtX(data.speedup[i])
       ];
       cells.forEach(function (c) {

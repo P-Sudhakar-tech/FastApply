@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import turboply  # noqa: F401  (registers the .turboply accessor)
-from turboply import decide, decide_row, decide_str, parallel
+import turbofastapply  # noqa: F401  (registers the .turbofastapply accessor)
+from turbofastapply import decide, decide_row, decide_str, parallel
 
 LARGE_N = 1000
 
@@ -20,19 +20,19 @@ def test_empty_series_numeric():
     s = pd.Series([], dtype="int64")
     func = lambda x: x * 2 + 1  # noqa: E731
     assert decide.try_numeric_fast_path(s, func) is None
-    pd.testing.assert_series_equal(s.turboply(func), s.apply(func))
+    pd.testing.assert_series_equal(s.turbofastapply(func), s.apply(func))
 
 
 def test_empty_series_string():
     s = pd.Series([], dtype=object)
     assert decide_str.decide(s, str.upper).result is None
-    pd.testing.assert_series_equal(s.turboply(str.upper), s.apply(str.upper))
+    pd.testing.assert_series_equal(s.turbofastapply(str.upper), s.apply(str.upper))
 
 
 def test_empty_dataframe_row_wise():
     df = pd.DataFrame({"a": pd.Series(dtype="int64"), "b": pd.Series(dtype="int64")})
     func = lambda row: row["a"] + row["b"]  # noqa: E731
-    result = df.turboply(func, axis=1)
+    result = df.turbofastapply(func, axis=1)
     expected = df.apply(func, axis=1)
     assert len(result) == len(expected) == 0
 
@@ -48,13 +48,13 @@ def test_empty_series_parallel_fallback():
 def test_one_row_series():
     s = pd.Series([42])
     func = lambda x: x * 3 + 7  # noqa: E731
-    pd.testing.assert_series_equal(s.turboply(func), s.apply(func))
+    pd.testing.assert_series_equal(s.turbofastapply(func), s.apply(func))
 
 
 def test_one_row_dataframe_row_wise():
     df = pd.DataFrame({"a": [1], "b": [2]})
     func = lambda row: row["a"] + row["b"]  # noqa: E731
-    pd.testing.assert_series_equal(df.turboply(func, axis=1), df.apply(func, axis=1))
+    pd.testing.assert_series_equal(df.turbofastapply(func, axis=1), df.apply(func, axis=1))
 
 
 # --- categorical dtype --------------------------------------------------------
@@ -64,7 +64,7 @@ def test_categorical_series_falls_back_correctly():
     s = pd.Series(list(range(LARGE_N)) * 2, dtype="category")
     func = lambda x: x * 2 + 1  # noqa: E731
     assert decide.try_numeric_fast_path(s, func) is None
-    pd.testing.assert_series_equal(s.turboply(func), s.apply(func))
+    pd.testing.assert_series_equal(s.turbofastapply(func), s.apply(func))
 
 
 def test_categorical_column_in_row_wise_falls_back_correctly():
@@ -78,7 +78,7 @@ def test_categorical_column_in_row_wise_falls_back_correctly():
     # "cat" is unused, but it's non-numeric, so it still must not corrupt
     # the result — this exercises decide_row's used-vs-unused logic
     # against a dtype kind (category) distinct from plain object/string.
-    result = df.turboply(func, axis=1)
+    result = df.turbofastapply(func, axis=1)
     expected = df.apply(func, axis=1)
     pd.testing.assert_series_equal(result, expected)
 
@@ -92,7 +92,7 @@ def test_object_dtype_numeric_series_falls_back():
     s = pd.Series([i for i in range(LARGE_N)], dtype=object)
     func = lambda x: x * 2 + 1  # noqa: E731
     assert decide.try_numeric_fast_path(s, func) is None
-    pd.testing.assert_series_equal(s.turboply(func), s.apply(func))
+    pd.testing.assert_series_equal(s.turbofastapply(func), s.apply(func))
 
 
 # --- integer overflow ---------------------------------------------------------
@@ -109,7 +109,7 @@ def test_large_int_values_near_int64_range_stay_correct():
     big = 2**40
     s = pd.Series(np.arange(big, big + LARGE_N, dtype=np.int64))
     func = lambda x: x * 2 + 1  # noqa: E731
-    result = s.turboply(func)
+    result = s.turbofastapply(func)
     expected = s.apply(func)
     pd.testing.assert_series_equal(result, expected)
 
@@ -121,7 +121,7 @@ def test_series_all_nan_falls_back():
     s = pd.Series([float("nan")] * LARGE_N)
     func = lambda x: x * 2 + 1  # noqa: E731
     assert decide.try_numeric_fast_path(s, func) is None
-    result = s.turboply(func)
+    result = s.turbofastapply(func)
     expected = s.apply(func)
     pd.testing.assert_series_equal(result, expected)
 
@@ -130,7 +130,7 @@ def test_dataframe_all_columns_nan_row_wise_falls_back():
     df = pd.DataFrame({"a": [float("nan")] * LARGE_N, "b": [float("nan")] * LARGE_N})
     func = lambda row: row["a"] + row["b"]  # noqa: E731
     assert decide_row.decide(df, func).result is None
-    result = df.turboply(func, axis=1)
+    result = df.turbofastapply(func, axis=1)
     expected = df.apply(func, axis=1)
     pd.testing.assert_series_equal(result, expected)
 
@@ -157,7 +157,7 @@ def test_boolean_series_declines_and_falls_back_correctly():
     assert decide.try_numeric_fast_path(s, lambda x: x) is None
 
     identity = lambda x: x  # noqa: E731
-    pd.testing.assert_series_equal(s.turboply(identity), s.apply(identity))
+    pd.testing.assert_series_equal(s.turbofastapply(identity), s.apply(identity))
 
     arithmetic = lambda x: x * 2 + 1  # noqa: E731
-    pd.testing.assert_series_equal(s.turboply(arithmetic), s.apply(arithmetic))
+    pd.testing.assert_series_equal(s.turbofastapply(arithmetic), s.apply(arithmetic))

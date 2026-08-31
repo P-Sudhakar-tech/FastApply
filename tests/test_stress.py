@@ -9,8 +9,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import turboply  # noqa: F401  (registers the .turboply accessor)
-from turboply import decide_row
+import turbofastapply  # noqa: F401  (registers the .turbofastapply accessor)
+from turbofastapply import decide_row
 
 PAST_PARALLEL_THRESHOLD = 60_000  # src/lib.rs PARALLEL_THRESHOLD is 50_000
 
@@ -27,7 +27,7 @@ PAST_PARALLEL_THRESHOLD = 60_000  # src/lib.rs PARALLEL_THRESHOLD is 50_000
 def test_numeric_fast_path_correct_past_parallel_threshold_int(func):
     s = pd.Series(np.arange(-PAST_PARALLEL_THRESHOLD // 2, PAST_PARALLEL_THRESHOLD // 2, dtype="int64"))
     expected = s.apply(func)
-    result = s.turboply(func)
+    result = s.turbofastapply(func)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -36,7 +36,7 @@ def test_numeric_fast_path_correct_past_parallel_threshold_float():
     s = pd.Series(rng.normal(size=PAST_PARALLEL_THRESHOLD))
     func = lambda x: x * 1.5 - 0.25  # noqa: E731
     expected = s.apply(func)
-    result = s.turboply(func)
+    result = s.turbofastapply(func)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -60,13 +60,13 @@ def test_str_upper_correct_past_parallel_threshold():
     """Correctness only — the string path isn't faster at any scale (see
     claude.md), but it must still be right at every scale."""
     s = pd.Series([f"item_{i}_mixed_CASE" for i in range(PAST_PARALLEL_THRESHOLD)])
-    result = s.turboply(str.upper, engine="native")
+    result = s.turbofastapply(str.upper, engine="native")
     expected = s.apply(str.upper)
     pd.testing.assert_series_equal(result, expected)
 
 
 def test_str_contains_correct_past_parallel_threshold():
     s = pd.Series([f"item_{i}_mixed" for i in range(PAST_PARALLEL_THRESHOLD)])
-    result = s.turboply.str.contains(r"item_\d*5_")
+    result = s.turbofastapply.str.contains(r"item_\d*5_")
     expected = s.str.contains(r"item_\d*5_", regex=True)
     pd.testing.assert_series_equal(result, expected)

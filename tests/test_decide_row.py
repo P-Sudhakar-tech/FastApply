@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import turboply  # noqa: F401  (registers the .turboply accessor)
-from turboply import _turboply, decide_row
+import turbofastapply  # noqa: F401  (registers the .turbofastapply accessor)
+from turbofastapply import _turbofastapply, decide_row
 
 LARGE_N = 1000
 
@@ -38,7 +38,7 @@ def _large_df():
 def test_row_affine_matches_pandas(func):
     df = _large_df()
     expected = df.apply(func, axis=1)
-    result = df.turboply(func, axis=1)
+    result = df.turbofastapply(func, axis=1)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -47,7 +47,7 @@ def test_row_affine_matches_pandas_on_float_columns():
     df = pd.DataFrame({"x": rng.normal(size=LARGE_N), "y": rng.normal(size=LARGE_N)})
     func = lambda row: 1.5 * row["x"] + 0.25 * row["y"] - 2  # noqa: E731
     expected = df.apply(func, axis=1)
-    result = df.turboply(func, axis=1)
+    result = df.turbofastapply(func, axis=1)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -55,13 +55,13 @@ def test_row_affine_matches_pandas_on_mixed_int_float_columns():
     df = pd.DataFrame({"a": range(LARGE_N), "b": np.linspace(0, 1, LARGE_N)})
     func = lambda row: row["a"] + row["b"]  # noqa: E731
     expected = df.apply(func, axis=1)
-    result = df.turboply(func, axis=1)
+    result = df.turbofastapply(func, axis=1)
     pd.testing.assert_series_equal(result, expected)
 
 
 def test_row_affine_int_dtype_preserved_when_result_is_whole():
     df = pd.DataFrame({"a": range(LARGE_N), "b": range(LARGE_N)})
-    result = df.turboply(lambda row: row["a"] + row["b"], axis=1)
+    result = df.turbofastapply(lambda row: row["a"] + row["b"], axis=1)
     assert result.dtype == np.int64
 
 
@@ -70,8 +70,8 @@ def test_row_affine_int_dtype_preserved_when_result_is_whole():
 
 def test_row_affine_actually_calls_native(monkeypatch):
     df = _large_df()
-    with mock.patch.object(_turboply, "row_affine_f64", wraps=_turboply.row_affine_f64) as spy:
-        result = df.turboply(lambda row: row["a"] + row["b"], axis=1)
+    with mock.patch.object(_turbofastapply, "row_affine_f64", wraps=_turbofastapply.row_affine_f64) as spy:
+        result = df.turbofastapply(lambda row: row["a"] + row["b"], axis=1)
     assert result.equals(df.apply(lambda row: row["a"] + row["b"], axis=1))
     spy.assert_called_once()
 
@@ -89,7 +89,7 @@ def test_non_affine_row_func_declines_and_falls_back_correctly(func):
     df = _large_df()
     assert decide_row.decide(df, func).result is None
     expected = df.apply(func, axis=1)
-    result = df.turboply(func, axis=1)
+    result = df.turbofastapply(func, axis=1)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -141,7 +141,7 @@ def test_axis0_never_uses_row_fast_path():
     even for a function that would be a trivial column-wise analogue."""
     df = pd.DataFrame({"a": range(LARGE_N), "b": range(LARGE_N)})
     expected = df.apply(lambda col: col.sum())
-    result = df.turboply(lambda col: col.sum())  # axis=0 default
+    result = df.turbofastapply(lambda col: col.sum())  # axis=0 default
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -150,7 +150,7 @@ def test_axis0_never_uses_row_fast_path():
 
 def test_verbose_reports_native_row_engine(capsys):
     df = _large_df()
-    df.turboply(lambda row: row["a"] + row["b"], axis=1, verbose=True)
+    df.turbofastapply(lambda row: row["a"] + row["b"], axis=1, verbose=True)
     err = capsys.readouterr().err
     assert "engine=native-row-affine" in err
 
@@ -172,7 +172,7 @@ def test_nan_in_used_column_outside_sample_does_not_silently_corrupt_result():
         return -999.0 if np.isnan(row["a"]) else row["a"] + row["b"]
 
     assert decide_row.decide(df, func).result is None
-    pd.testing.assert_series_equal(df.turboply(func, axis=1), df.apply(func, axis=1))
+    pd.testing.assert_series_equal(df.turbofastapply(func, axis=1), df.apply(func, axis=1))
 
 
 def test_nan_in_unused_column_does_not_block_acceleration():
@@ -195,7 +195,7 @@ def test_single_row_dataframe_falls_back():
     df = pd.DataFrame({"a": [1], "b": [2]})
     func = lambda row: row["a"] + row["b"]  # noqa: E731
     assert decide_row.decide(df, func).result is None
-    pd.testing.assert_series_equal(df.turboply(func, axis=1), df.apply(func, axis=1))
+    pd.testing.assert_series_equal(df.turbofastapply(func, axis=1), df.apply(func, axis=1))
 
 
 def test_unused_float_column_upcasts_result_to_float_matching_pandas():
@@ -224,6 +224,6 @@ def test_empty_dataframe_falls_back():
     df = pd.DataFrame({"a": pd.Series(dtype="int64"), "b": pd.Series(dtype="int64")})
     func = lambda row: row["a"] + row["b"]  # noqa: E731
     assert decide_row.decide(df, func).result is None
-    result = df.turboply(func, axis=1)
+    result = df.turbofastapply(func, axis=1)
     expected = df.apply(func, axis=1)
     assert len(result) == len(expected) == 0

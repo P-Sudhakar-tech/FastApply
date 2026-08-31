@@ -3,7 +3,7 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "turboply"
+name = "turbofastapply"
 version = "0.1.0"
 description = "A drop-in, accelerated replacement for pandas .apply()"
 readme = "README.md"
@@ -35,4 +35,4 @@ Repository = "https://github.com/P-Sudhakar-tech/FastApply"
 test = ["pytest>=7.0"]
 
 [tool.maturin]
-module-name = "turboply._turboply"
+module-name = "turbofastapply._turbofastapply"

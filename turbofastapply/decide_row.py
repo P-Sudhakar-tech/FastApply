@@ -29,7 +29,7 @@ trusted on the full data.
 import numpy as np
 import pandas as pd
 
-from . import _turboply
+from . import _turbofastapply
 from .decide import Decision, _is_real_number
 
 MIN_ROWS = 50
@@ -141,7 +141,7 @@ def decide(df, func, *, enforce_min_rows=True):
         arrays = [df[col].to_numpy(dtype=float) for col in used_columns]
         used_coeffs = [c for _, c in used]
         try:
-            out = _turboply.row_affine_f64(arrays, used_coeffs, baseline)
+            out = _turbofastapply.row_affine_f64(arrays, used_coeffs, baseline)
         except Exception as exc:
             return Decision(None, "pandas", f"native call raised on full dataframe: {exc!r}")
     else:

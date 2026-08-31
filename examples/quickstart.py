@@ -1,4 +1,4 @@
-"""Standalone script to manually try out turboply.
+"""Standalone script to manually try out turbofastapply.
 
 Run it directly (no pytest needed) to see the package working end to end.
 Requires the package to be built first (`maturin develop` or `./build.ps1`):
@@ -6,9 +6,9 @@ Requires the package to be built first (`maturin develop` or `./build.ps1`):
     .venv/Scripts/python.exe examples/quickstart.py
 
 Every check prints PASS/FAIL and compares against plain pandas .apply() so
-you can see for yourself that `s.turboply(func)` — the primary API, the
+you can see for yourself that `s.turbofastapply(func)` — the primary API, the
 accessor is directly callable — is a correctness-safe drop-in replacement.
-`.turboply.apply(func)` still works too, as an alias.
+`.turbofastapply.apply(func)` still works too, as an alias.
 
 Also demonstrates the engine/verbose/progress_bar options: engine="pandas"
 forces the fallback, engine="native" requires the fast path and raises
@@ -20,7 +20,7 @@ there's nothing to report progress on there).
 
 import pandas as pd
 
-import turboply
+import turbofastapply
 
 
 def check(label, got, expected):
@@ -40,8 +40,8 @@ def main():
     s = pd.Series([1, 2, 3, 4, 5])
     results.append(
         check(
-            "series .turboply(func) matches pandas",
-            s.turboply(lambda x: x * 2),
+            "series .turbofastapply(func) matches pandas",
+            s.turbofastapply(lambda x: x * 2),
             s.apply(lambda x: x * 2),
         )
     )
@@ -50,8 +50,8 @@ def main():
     names = pd.Series(["ada", "grace", "margaret"])
     results.append(
         check(
-            "series .turboply(func) (strings) matches pandas",
-            names.turboply(str.title),
+            "series .turbofastapply(func) (strings) matches pandas",
+            names.turbofastapply(str.title),
             names.apply(str.title),
         )
     )
@@ -69,26 +69,26 @@ def main():
     many_names = pd.Series(["  Ada  ", "GRACE", "margaret"] * 50)
     results.append(
         check(
-            "series .turboply(str.upper, engine='native') matches pandas",
-            many_names.turboply(str.upper, engine="native"),
+            "series .turbofastapply(str.upper, engine='native') matches pandas",
+            many_names.turbofastapply(str.upper, engine="native"),
             many_names.apply(str.upper),
         )
     )
 
-    # 2c. .turboply.str mirrors pandas' own .str accessor for the two
+    # 2c. .turbofastapply.str mirrors pandas' own .str accessor for the two
     #     regex ops that need arguments (contains/replace). Same
     #     performance caveat as 3b applies here too.
     results.append(
         check(
-            ".turboply.str.contains matches pandas",
-            many_names.turboply.str.contains("GRACE"),
+            ".turbofastapply.str.contains matches pandas",
+            many_names.turbofastapply.str.contains("GRACE"),
             many_names.str.contains("GRACE", regex=True),
         )
     )
     results.append(
         check(
-            ".turboply.str.replace matches pandas",
-            many_names.turboply.str.replace(r"\s+", "_"),
+            ".turbofastapply.str.replace matches pandas",
+            many_names.turbofastapply.str.replace(r"\s+", "_"),
             many_names.str.replace(r"\s+", "_", regex=True),
         )
     )
@@ -97,8 +97,8 @@ def main():
     df = pd.DataFrame({"a": [1, 2, 3], "b": [10, 20, 30]})
     results.append(
         check(
-            "dataframe .turboply(func) (axis=0) matches pandas",
-            df.turboply(lambda col: col.sum()),
+            "dataframe .turbofastapply(func) (axis=0) matches pandas",
+            df.turbofastapply(lambda col: col.sum()),
             df.apply(lambda col: col.sum()),
         )
     )
@@ -106,8 +106,8 @@ def main():
     # 4. DataFrame accessor: row-wise apply (axis=1).
     results.append(
         check(
-            "dataframe .turboply(func) (axis=1) matches pandas",
-            df.turboply(lambda row: row["a"] + row["b"], axis=1),
+            "dataframe .turbofastapply(func) (axis=1) matches pandas",
+            df.turbofastapply(lambda row: row["a"] + row["b"], axis=1),
             df.apply(lambda row: row["a"] + row["b"], axis=1),
         )
     )
@@ -117,7 +117,7 @@ def main():
     results.append(
         check(
             "empty series fallback matches pandas",
-            empty.turboply(lambda x: x),
+            empty.turbofastapply(lambda x: x),
             empty.apply(lambda x: x),
         )
     )
@@ -125,9 +125,9 @@ def main():
     # 6. .apply() still works as an alias for the direct-call form.
     results.append(
         check(
-            ".turboply.apply(func) alias matches .turboply(func)",
-            s.turboply.apply(lambda x: x * 2),
-            s.turboply(lambda x: x * 2),
+            ".turbofastapply.apply(func) alias matches .turbofastapply(func)",
+            s.turbofastapply.apply(lambda x: x * 2),
+            s.turbofastapply(lambda x: x * 2),
         )
     )
 
@@ -136,7 +136,7 @@ def main():
     results.append(
         check(
             "engine='pandas' matches plain pandas",
-            large.turboply(lambda x: x * 2, engine="pandas"),
+            large.turbofastapply(lambda x: x * 2, engine="pandas"),
             large.apply(lambda x: x * 2),
         )
     )
@@ -144,27 +144,27 @@ def main():
     # 8. engine="native" raises with a clear reason instead of silently
     #    falling back, when the callable isn't fast-path eligible.
     try:
-        large.turboply(lambda x: x**2, engine="native")
+        large.turbofastapply(lambda x: x**2, engine="native")
         results.append(check("engine='native' raises on ineligible func", False, True))
     except ValueError as exc:
         results.append(check(f"engine='native' raises: {exc}", True, True))
 
     # 9. verbose=True explains the routing decision (see stderr).
     print("\n[verbose demo - routing explanation printed to stderr below]")
-    large.turboply(lambda x: x * 2 + 1, verbose=True)
+    large.turbofastapply(lambda x: x * 2 + 1, verbose=True)
 
     # 10. progress_bar=True reports progress for the pandas fallback path.
     print("\n[progress_bar demo - bar printed to stderr below]")
-    large.turboply(lambda x: x**2, progress_bar=True)
+    large.turbofastapply(lambda x: x**2, progress_bar=True)
     print()
 
-    # 11. .groupby(...).turboply(func) — correctness-only passthrough to
+    # 11. .groupby(...).turbofastapply(func) — correctness-only passthrough to
     #     GroupBy.apply() (no native fast path for GroupBy yet).
     grouped = df.groupby("a")
     results.append(
         check(
-            "groupby .turboply(func) matches GroupBy.apply(func)",
-            grouped.turboply(lambda g: g["b"].sum(), include_groups=False),
+            "groupby .turbofastapply(func) matches GroupBy.apply(func)",
+            grouped.turbofastapply(lambda g: g["b"].sum(), include_groups=False),
             grouped.apply(lambda g: g["b"].sum(), include_groups=False),
         )
     )

@@ -547,7 +547,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "turboply"
+name = "turbofastapply"
 version = "0.1.0"
 dependencies = [
  "criterion",

@@ -1,4 +1,4 @@
-"""Benchmark: plain pandas .apply() vs .turboply() on 1,000 rows.
+"""Benchmark: plain pandas .apply() vs .turbofastapply() on 1,000 rows.
 
     .venv/Scripts/python.exe examples/benchmark.py
 
@@ -25,7 +25,7 @@ Arbitrary callables that don't match a native pattern get a
 sampling-based threaded fallback (P3) instead of a straight serial loop,
 when a sample measurement shows it's actually faster.
 
-`s.turboply(func)` is the primary API (the accessor is directly callable);
+`s.turbofastapply(func)` is the primary API (the accessor is directly callable);
 `.apply()` still works as an alias.
 
 Reported numbers use the median of many repeats with a warmup, since these
@@ -39,7 +39,7 @@ import time
 import numpy as np
 import pandas as pd
 
-import turboply  # noqa: F401  (registers the .turboply accessor)
+import turbofastapply  # noqa: F401  (registers the .turbofastapply accessor)
 
 N_ROWS = 1000
 N_REPEATS = 50
@@ -57,14 +57,14 @@ def timed(fn, repeats=N_REPEATS, warmup=N_WARMUP):
     return times
 
 
-def report(label, pandas_times, turboply_times):
+def report(label, pandas_times, turbofastapply_times):
     p_med = statistics.median(pandas_times) * 1000
-    t_med = statistics.median(turboply_times) * 1000
+    t_med = statistics.median(turbofastapply_times) * 1000
     speedup = p_med / t_med if t_med else float("inf")
 
     print(label)
     print(f"  pandas .apply()  {p_med:8.4f} ms (median of {N_REPEATS})")
-    print(f"  .turboply()      {t_med:8.4f} ms (median of {N_REPEATS})")
+    print(f"  .turbofastapply()      {t_med:8.4f} ms (median of {N_REPEATS})")
     print(f"  speedup          {speedup:.2f}x")
     print()
 
@@ -85,25 +85,25 @@ def main():
     report(
         "Series numeric transform: x * 2 + 1  [native fast path, int64]",
         timed(lambda: numbers.apply(lambda x: x * 2 + 1)),
-        timed(lambda: numbers.turboply(lambda x: x * 2 + 1)),
+        timed(lambda: numbers.turbofastapply(lambda x: x * 2 + 1)),
     )
 
     report(
         "DataFrame row-wise apply, axis=1: row['a'] + row['b']  [native fast path, Phase 5]",
         timed(lambda: df.apply(lambda row: row["a"] + row["b"], axis=1)),
-        timed(lambda: df.turboply(lambda row: row["a"] + row["b"], axis=1)),
+        timed(lambda: df.turbofastapply(lambda row: row["a"] + row["b"], axis=1)),
     )
 
     names = df["name"]
     report(
         "Series string transform: str.upper, engine='auto'  [never native, by design]",
         timed(lambda: names.apply(str.upper)),
-        timed(lambda: names.turboply(str.upper)),
+        timed(lambda: names.turbofastapply(str.upper)),
     )
     report(
         "Series string transform: str.upper, engine='native'  [forced, see caveat above]",
         timed(lambda: names.apply(str.upper)),
-        timed(lambda: names.turboply(str.upper, engine="native")),
+        timed(lambda: names.turbofastapply(str.upper, engine="native")),
     )
 
     print(

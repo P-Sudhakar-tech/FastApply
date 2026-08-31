@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import turboply  # noqa: F401  (registers the .turboply accessor)
-from turboply import groupby_parallel
+import turbofastapply  # noqa: F401  (registers the .turbofastapply accessor)
+from turbofastapply import groupby_parallel
 
 N_GROUPS = groupby_parallel.MIN_GROUPS + 10
 ROWS_PER_GROUP = 3
@@ -67,7 +67,7 @@ def test_parallel_fallback_matches_pandas_for_gil_releasing_func():
     grouped = df.groupby("key")
     func = _gil_releasing_sum(set())
     expected = grouped.apply(lambda g: g["value"].sum(), include_groups=False)
-    result = grouped.turboply(func, include_groups=False)
+    result = grouped.turbofastapply(func, include_groups=False)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -75,7 +75,7 @@ def test_cpu_bound_func_still_correct_even_if_not_parallelized():
     df = _df()
     grouped = df.groupby("key")
     expected = grouped.apply(_cpu_bound_sum, include_groups=False)
-    result = grouped.turboply(_cpu_bound_sum, include_groups=False)
+    result = grouped.turbofastapply(_cpu_bound_sum, include_groups=False)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -117,7 +117,7 @@ def test_parallel_fallback_matches_pandas_for_seriesgroupby():
         return s.sum()
 
     expected = grouped.apply(lambda s: s.sum())
-    result = grouped.turboply(func)
+    result = grouped.turbofastapply(func)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -130,7 +130,7 @@ def test_parallel_fallback_matches_pandas_dataframe_shaped_result():
         return g.assign(value_x2=g["value"] * 2)
 
     expected = grouped.apply(func, include_groups=False)
-    result = grouped.turboply(func, include_groups=False)
+    result = grouped.turbofastapply(func, include_groups=False)
     pd.testing.assert_frame_equal(result, expected)
 
 
@@ -145,7 +145,7 @@ def test_parallel_fallback_matches_pandas_multikey_dropna_false():
         return g["value"].sum()
 
     expected = grouped_expected.apply(func, include_groups=False).reset_index(drop=True)
-    result = grouped_result.turboply(func, include_groups=False).reset_index(drop=True)
+    result = grouped_result.turbofastapply(func, include_groups=False).reset_index(drop=True)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -158,7 +158,7 @@ def test_parallel_fallback_passes_extra_args_and_kwargs():
         return g["value"].sum() * multiplier + offset
 
     expected = grouped.apply(func, 2, offset=5, include_groups=False)
-    result = grouped.turboply(func, 2, offset=5, include_groups=False)
+    result = grouped.turbofastapply(func, 2, offset=5, include_groups=False)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -173,7 +173,7 @@ def test_gil_releasing_func_actually_runs_on_multiple_threads():
     def attempt():
         thread_ids = set()
         df = _df()
-        df.groupby("key").turboply(_gil_releasing_sum(thread_ids))
+        df.groupby("key").turbofastapply(_gil_releasing_sum(thread_ids))
         return len(thread_ids) > 1
 
     _eventually(attempt)
@@ -218,7 +218,7 @@ def test_engine_auto_falls_back_correctly_when_include_groups_passed():
     grouped = df.groupby("key")
     func = _gil_releasing_sum(set())
     expected = grouped.apply(func, include_groups=False)
-    result = grouped.turboply(func, include_groups=False)
+    result = grouped.turbofastapply(func, include_groups=False)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -228,7 +228,7 @@ def test_engine_auto_falls_back_correctly_when_include_groups_passed():
 def test_verbose_reports_threaded_parallel_engine(capsys):
     def attempt():
         df = _df()
-        df.groupby("key").turboply(_gil_releasing_sum(set()), verbose=True)
+        df.groupby("key").turbofastapply(_gil_releasing_sum(set()), verbose=True)
         return "engine=threaded-parallel" in capsys.readouterr().err
 
     _eventually(attempt)
@@ -244,7 +244,7 @@ def test_engine_pandas_never_engages_parallel_fallback(monkeypatch):
         "try_parallel_fallback",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not be called")),
     )
-    result = df.groupby("key").turboply(_gil_releasing_sum(set()), engine="pandas", include_groups=False)
+    result = df.groupby("key").turbofastapply(_gil_releasing_sum(set()), engine="pandas", include_groups=False)
     pd.testing.assert_series_equal(
         result, df.groupby("key").apply(lambda g: g["value"].sum(), include_groups=False)
     )
@@ -258,4 +258,4 @@ def test_engine_native_never_engages_parallel_fallback(monkeypatch):
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not be called")),
     )
     with pytest.raises(ValueError, match="no native GroupBy fast path"):
-        df.groupby("key").turboply(_gil_releasing_sum(set()), engine="native", include_groups=False)
+        df.groupby("key").turbofastapply(_gil_releasing_sum(set()), engine="native", include_groups=False)

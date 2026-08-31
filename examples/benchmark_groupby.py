@@ -1,4 +1,4 @@
-"""Benchmark: plain pandas GroupBy.apply() vs .turboply() for the new
+"""Benchmark: plain pandas GroupBy.apply() vs .turbofastapply() for the new
 threaded parallel fallback (P9, groupby_parallel.py).
 
     .venv/Scripts/python.exe examples/benchmark_groupby.py
@@ -24,7 +24,7 @@ import time
 import numpy as np
 import pandas as pd
 
-import turboply  # noqa: F401  (registers the .turboply accessor)
+import turbofastapply  # noqa: F401  (registers the .turbofastapply accessor)
 
 N_GROUPS = 1000  # comfortably above groupby_parallel.MIN_GROUPS (800) --
 # below that threshold the parallel tier declines immediately (by
@@ -45,14 +45,14 @@ def timed(fn, repeats=N_REPEATS, warmup=N_WARMUP):
     return times
 
 
-def report(label, pandas_times, turboply_times):
+def report(label, pandas_times, turbofastapply_times):
     p_med = statistics.median(pandas_times) * 1000
-    t_med = statistics.median(turboply_times) * 1000
+    t_med = statistics.median(turbofastapply_times) * 1000
     speedup = p_med / t_med if t_med else float("inf")
 
     print(label)
     print(f"  pandas GroupBy.apply()  {p_med:8.4f} ms (median of {N_REPEATS})")
-    print(f"  .turboply()             {t_med:8.4f} ms (median of {N_REPEATS})")
+    print(f"  .turbofastapply()             {t_med:8.4f} ms (median of {N_REPEATS})")
     print(f"  speedup                 {speedup:.2f}x")
     print()
     return speedup
@@ -83,7 +83,7 @@ def main():
     report(
         "Case 1: GIL-releasing callable (simulated I/O, time.sleep per group)",
         timed(lambda: grouped.apply(gil_releasing)),
-        timed(lambda: grouped.turboply(gil_releasing)),
+        timed(lambda: grouped.turbofastapply(gil_releasing)),
     )
 
     # Case 2: CPU-bound pure Python (GIL held the whole time).
@@ -96,7 +96,7 @@ def main():
     report(
         "Case 2: CPU-bound pure-Python callable (no threading benefit expected)",
         timed(lambda: grouped.apply(cpu_bound)),
-        timed(lambda: grouped.turboply(cpu_bound)),
+        timed(lambda: grouped.turbofastapply(cpu_bound)),
     )
 
     # Case 3: Mixed — real pandas/numpy work (releases GIL in spots) plus
@@ -116,7 +116,7 @@ def main():
     report(
         "Case 3: mixed callable (pandas/numpy stats + custom logic, extra kwarg)",
         timed(lambda: grouped.apply(mixed, 1.5)),
-        timed(lambda: grouped.turboply(mixed, 1.5)),
+        timed(lambda: grouped.turbofastapply(mixed, 1.5)),
     )
 
     print(

@@ -9,12 +9,12 @@ two points; string operations have no such closed form). So this module
 covers two different mechanisms:
 
   - `decide()` — a strict identity whitelist for the handful of no-argument
-    str methods reachable through plain `.turboply(func)`: `str.upper`,
+    str methods reachable through plain `.turbofastapply(func)`: `str.upper`,
     `str.lower`, `str.strip`. `func is str.upper` is completely safe to
     match this way (zero risk of misdetection, unlike sample-based
     guessing), since it's the exact operation, not an inference.
 
-  - `verified_native()` — shared by `decide()` and by the `.turboply.str`
+  - `verified_native()` — shared by `decide()` and by the `.turbofastapply.str`
     sub-accessor (str_accessor.py) for the parametrized `contains`/
     `replace` ops, which are called directly instead of inferred from a
     lambda for the reason above. Even for an exact identity match, this
@@ -27,15 +27,15 @@ covers two different mechanisms:
 
 import pandas as pd
 
-from . import _turboply
+from . import _turbofastapply
 from .decide import SAMPLE_SIZE, Decision
 
 MIN_ROWS = 50
 
 _METHOD_WHITELIST = {
-    str.upper: ("native-str-upper", lambda items: _turboply.str_upper(items)),
-    str.lower: ("native-str-lower", lambda items: _turboply.str_lower(items)),
-    str.strip: ("native-str-strip", lambda items: _turboply.str_strip(items)),
+    str.upper: ("native-str-upper", lambda items: _turbofastapply.str_upper(items)),
+    str.lower: ("native-str-lower", lambda items: _turbofastapply.str_lower(items)),
+    str.strip: ("native-str-strip", lambda items: _turbofastapply.str_strip(items)),
 }
 
 
@@ -101,7 +101,7 @@ def verified_native(series, native_fn, python_equiv, label, min_rows=MIN_ROWS, d
 
 
 def decide(series, func):
-    """Whitelist dispatch for .turboply(func) — only exact identity
+    """Whitelist dispatch for .turbofastapply(func) — only exact identity
     matches against known str methods (upper/lower/strip)."""
     whitelisted = _METHOD_WHITELIST.get(func)
     if whitelisted is None:

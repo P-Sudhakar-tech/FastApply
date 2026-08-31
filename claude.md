@@ -1,7 +1,20 @@
-# Turboply
+# TurboFastApply
 
 A drop-in, accelerated replacement for `pandas.apply()`, in the spirit of
 [swifter](https://github.com/jmcarpenter2/swifter).
+
+Renamed from `turboply` to `turbofastapply` (package name, import name,
+`.turbofastapply(func)` accessor, and PyPI project name, all together) —
+`turboply` was already in use for something unrelated. Full rename across
+every file: package directory, Rust crate/lib name (`turbofastapply` /
+`_turbofastapply`), pandas accessor registration string, all tests/
+examples/docs. Nothing published to PyPI or TestPyPI under the old name
+carries forward — this is a clean-slate rename, not a compatibility
+alias. Verified end-to-end after the rename, not just text-replaced:
+full local suite (159/159), Rust unit tests (6/6), `quickstart.py`
+(12/12), and a from-scratch wheel build installed into a completely
+fresh venv, confirming `import turbofastapply` and `.turbofastapply(func)`
+both resolve and work correctly outside the dev repo.
 
 ## Naming rule
 
@@ -45,7 +58,7 @@ note said the precompiled `maturin.exe` couldn't launch here (missing MSVC
 Visual C++ Redistributable); that's no longer reproducible, whatever
 changed (redistributable installed, maturin reinstalled, or similar).
 `./build.ps1` (runs `cargo build --release` directly, copies the DLL into
-`turboply/_turboply.pyd`, and writes a `turboply.pth` file into the
+`turbofastapply/_turbofastapply.pyd`, and writes a `turbofastapply.pth` file into the
 venv's site-packages) still works too and remains the fallback if
 `maturin develop` ever fails to launch again — worth trying `maturin
 develop --release` first regardless, since it's the standard path.
@@ -69,13 +82,22 @@ and macOS (universal2: x86_64 + arm64) via `PyO3/maturin-action` in
 `.github/workflows/release.yml`, plus an sdist. Publishing uses PyPI's
 Trusted Publishing (OIDC) — no API tokens stored as secrets.
 
+The trusted publisher registration is tied to the exact PyPI project
+name, so the `turboply` → `turbofastapply` rename orphaned any existing
+`turboply` registration on test.pypi.org/pypi.org — it does nothing for
+`turbofastapply` and can be deleted. **The one-time setup below must be
+redone for `turbofastapply` specifically** before the next release can
+publish; a `turboply==0.1.0` release already went out to TestPyPI under
+the old name before the rename and stays there (PyPI/TestPyPI don't
+allow deleting or renaming a published release).
+
 **One-time setup (do this before the first release):**
 1. In the GitHub repo settings, create two environments: `testpypi` and
    `pypi` (Settings → Environments). Consider adding a required reviewer
    on `pypi` as an extra manual gate beyond the workflow_dispatch trigger.
 2. On [test.pypi.org](https://test.pypi.org) and
    [pypi.org](https://pypi.org), add a trusted publisher for the
-   `turboply` project (or pending publisher, if the project doesn't exist
+   `turbofastapply` project (or pending publisher, if the project doesn't exist
    there yet): owner `P-Sudhakar-tech`, repo `FastApply`, workflow
    `release.yml`, environment name matching (`testpypi` / `pypi`
    respectively).
@@ -87,7 +109,7 @@ Trusted Publishing (OIDC) — no API tokens stored as secrets.
    no separate version-bump commit needed.
 2. Install from TestPyPI somewhere clean and sanity-check it:
    `pip install --index-url https://test.pypi.org/simple/
-   --extra-index-url https://pypi.org/simple/ turboply==0.1.0`
+   --extra-index-url https://pypi.org/simple/ turbofastapply==0.1.0`
    (the `--extra-index-url` is needed so pandas/numpy resolve from real
    PyPI, since TestPyPI doesn't mirror them).
 3. Once confirmed, go to Actions → Release → Run workflow, pick the same
@@ -118,16 +140,16 @@ cibuildwheel config layer on top.
 wheel packaging are all done — see "Polish & UX" and "Publishing" below.
 The one open item is live benchmark numbers against swifter: swifter
 1.4.0 doesn't run cleanly against this repo's pandas/Python versions (a
-swifter/dask compatibility gap, not a turboply issue) — see
+swifter/dask compatibility gap, not a turbofastapply issue) — see
 `examples/benchmark_vs_competitor.py`'s error message for specifics.
 
 \*\* P4: correctly implemented and fully tested, but benchmarking (500 to
 1,000,000 rows) found the native string path is consistently ~0.6-0.8x
 plain pandas — never faster — so it's deliberately excluded from
 `engine="auto"`, reachable only via explicit `engine="native"` or
-`.turboply.str.contains()`/`.replace()`. See the P4 section below for why.
+`.turbofastapply.str.contains()`/`.replace()`. See the P4 section below for why.
 
-\*\*\* P8: `.groupby(...).turboply(func)` works and is fully tested, but
+\*\*\* P8: `.groupby(...).turbofastapply(func)` works and is fully tested, but
 — at the time — there was no native OR parallel fast path behind it at
 all, unlike every other tier. It was a pure, always-on passthrough to
 `GroupBy.apply()`. P9 (below) added the threaded-parallel tier on top of
@@ -145,7 +167,7 @@ trusted to slot in behind it.
 ```mermaid
 flowchart TD
     P0["P0 · Setup\ncargo init, maturin new, CI skeleton"] --> P1
-    P1["P1 · Core Accessor + Fallback\n.turboply.apply() == pandas .apply()"] --> P2
+    P1["P1 · Core Accessor + Fallback\n.turbofastapply.apply() == pandas .apply()"] --> P2
     P2["P2 · Numeric Fast Path\nwhitelisted ops, rayon, zero-copy numpy"] --> P3
     P3["P3 · Sampling-Based Smart Dispatch\nauto-routing, parallel fallback"] --> P4
     P4["P4 · String Ops Fast Path\nregex-backed str accessors"] --> P5
@@ -169,16 +191,16 @@ flowchart TD
 - Verify toolchain: trivial native fn (`dummy_add`) callable from Python
 - pytest + GitHub Actions CI skeleton (build + test on push)
 
-**Deliverable:** `import turboply` works, `dummy_add(2, 3) == 5`.
+**Deliverable:** `import turbofastapply` works, `dummy_add(2, 3) == 5`.
 
 ### P1 — Core Accessor + Fallback (week 2) — Done
-- `register_series_accessor("turboply")` / `register_dataframe_accessor("turboply")`
-- `.turboply.apply()` always falls back to native `pandas.apply()` — no
+- `register_series_accessor("turbofastapply")` / `register_dataframe_accessor("turbofastapply")`
+- `.turbofastapply.apply()` always falls back to native `pandas.apply()` — no
   acceleration yet, get the interface and fallback path correct first
 - Test suite: accessor exists, output matches plain `.apply()` exactly for
   arbitrary functions
 
-**Deliverable:** `df["x"].turboply.apply(func)` works and is provably
+**Deliverable:** `df["x"].turbofastapply.apply(func)` works and is provably
 equivalent to pandas, 100% fallback. 12/12 tests passing.
 
 ### P2 — Numeric Fast Path (weeks 3–4) — Done
@@ -210,7 +232,7 @@ equivalent to pandas, 100% fallback. 12/12 tests passing.
   made the fast path a net win at 1,000 rows instead of a net loss
 - Dispatch heuristic (`decide.py`): dtype check + row-count threshold +
   sample verification + int64-vs-float64 path selection, wired into
-  `TurboplySeriesAccessor.__call__`
+  `TurboFastApplySeriesAccessor.__call__`
 - Tests (`tests/test_decide.py`): equivalence vs pandas on large int/float
   Series, dtype restoration, correct fallback for non-affine functions,
   small-series and string-series never engage the fast path, and
@@ -223,8 +245,8 @@ transform case (`x * 2 + 1` on 1,000 rows) lands consistently around
 
 ## API convention
 
-The accessor is directly callable — `s.turboply(func)` is the primary,
-documented API, not `s.turboply.apply(func)`. `.apply()` is kept only as
+The accessor is directly callable — `s.turbofastapply(func)` is the primary,
+documented API, not `s.turbofastapply.apply(func)`. `.apply()` is kept only as
 an alias (`apply = __call__` on both accessor classes) so it still works
 for anyone reaching for the pandas-familiar spelling, but new examples and
 docs should lead with the direct-call form.
@@ -267,10 +289,10 @@ and friends that the race genuinely engages threading only when it helps.
   trick relies on affine functions being fully determined by exactly two
   points — string ops have no equivalent closed form). So:
   - `decide_str.py`: a strict identity whitelist for the no-argument
-    methods reachable through `.turboply(func)` — `str.upper`,
+    methods reachable through `.turbofastapply(func)` — `str.upper`,
     `str.lower`, `str.strip`. `func is str.upper` is a safe, zero-risk
     match (the exact operation, not an inference).
-  - `str_accessor.py`: a `.turboply.str` sub-accessor mirroring pandas'
+  - `str_accessor.py`: a `.turbofastapply.str` sub-accessor mirroring pandas'
     own `.str`, for `.contains(pattern)` / `.replace(pattern, repl)` —
     called directly instead of inferred from a lambda, backed by Rust's
     `regex` crate.
@@ -297,7 +319,7 @@ and friends that the race genuinely engages threading only when it helps.
   "never worse than plain pandas, sometimes better", and this is a tier
   proven to only ever be worse. It's reachable via `engine="native"` (an
   explicit override — correctness-verified as always, no performance
-  promise) or `.turboply.str.contains()`/`.replace()` directly.
+  promise) or `.turbofastapply.str.contains()`/`.replace()` directly.
 - Tests (`tests/test_decide_str.py`): equivalence including Unicode,
   identity-only matching (a lambda wrapping `str.upper` isn't matched,
   only `func is str.upper` itself), null/mixed-type Series decline
@@ -378,7 +400,7 @@ pandas (constructs a Series object per row internally).
 **Deliverable:** PyPI-publishable v0.1.0 release. Publishable today in the
 sense that CI can build and ship wheels with real UX polish behind them;
 the one gap is verified swifter benchmark numbers (external compatibility
-issue, not a turboply gap).
+issue, not a turbofastapply gap).
 
 ### P7 — Benchmarking & Hardening (week 10) — Done
 - `criterion` benchmarks (`benches/native_benches.rs`, `cargo bench`) for
@@ -438,12 +460,12 @@ common case, and the three bugs above are now regression-tested.
 ### P8 — GroupBy Support (Correctness-Only) — Done***
 
 - Prompted by a real user error, not planned in the original roadmap:
-  `df.groupby(...).turboply(func)` raised
-  `AttributeError: 'DataFrameGroupBy' object has no attribute 'turboply'`
-  — turboply had only ever registered accessors for `pd.Series` and
+  `df.groupby(...).turbofastapply(func)` raised
+  `AttributeError: 'DataFrameGroupBy' object has no attribute 'turbofastapply'`
+  — turbofastapply had only ever registered accessors for `pd.Series` and
   `pd.DataFrame`, never for the `DataFrameGroupBy`/`SeriesGroupBy`
   objects `.groupby(...)` returns, which are entirely separate classes.
-- `accessor.py`'s `TurboplyGroupByAccessor` fixes this the same way P1
+- `accessor.py`'s `TurboFastApplyGroupByAccessor` fixes this the same way P1
   fixed the original bare-accessor gap: get a correctness-verified
   passthrough working first, before any acceleration is attempted. It
   always delegates to `GroupBy.apply(func, *args, **kwargs)` unchanged,
@@ -494,8 +516,8 @@ common case, and the three bugs above are now regression-tested.
   accessor instance is cached (same object on repeated access) rather
   than rebuilt every time.
 
-**Deliverable:** `df.groupby(...).turboply(func)` and
-`series.groupby(...).turboply(func)` are drop-in, correctness-verified
+**Deliverable:** `df.groupby(...).turbofastapply(func)` and
+`series.groupby(...).turbofastapply(func)` are drop-in, correctness-verified
 replacements for `GroupBy.apply()` — no longer broken, though at this
 point still no faster than plain pandas. P9 (below) is the acceleration
 half of the same request.
@@ -503,7 +525,7 @@ half of the same request.
 ### P9 — GroupBy Threaded Parallel Fallback — Done
 
 - Direct follow-up to P8, prompted by the same real user: once
-  `.groupby(...).turboply(func)` stopped raising, the next question was
+  `.groupby(...).turbofastapply(func)` stopped raising, the next question was
   "then the performance should be increased for this also." The
   function in question (`payroll_month_range_generator`) takes extra
   kwargs and does arbitrary custom logic — not a simple aggregation
@@ -660,7 +682,7 @@ half of the same request.
   guarantee actually holding across the full parameter space tested,
   not just the one scenario checked first.
 
-**Deliverable:** `.groupby(...).turboply(func)` under `engine="auto"`
+**Deliverable:** `.groupby(...).turbofastapply(func)` under `engine="auto"`
 now actually attempts real acceleration via threading before falling
 back to plain pandas, for any GIL-releasing custom callable — not just
 the narrow aggregation-shaped functions a pattern detector would have

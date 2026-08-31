@@ -1,4 +1,4 @@
-# Turboply
+# TurboFastApply
 
 A drop-in, accelerated replacement for `pandas.apply()`.
 
@@ -10,11 +10,11 @@ through genuine native fast paths, ~1.9–2x and ~4–4.5x faster than plain
 Arbitrary callables that don't qualify get a sampling-based threaded
 fallback that only engages when actually measured faster (helps I/O-bound
 work, correctly declines pure-CPU-bound Python). Everything else falls
-back to native `pandas.apply()`, so `.turboply` is always
+back to native `pandas.apply()`, so `.turbofastapply` is always
 correctness-equivalent to it. See `claude.md` for the full roadmap,
 including three real correctness bugs found and fixed during hardening.
 
-String ops (`str.upper`/`.lower`/`.strip`, `.turboply.str.contains()`/
+String ops (`str.upper`/`.lower`/`.strip`, `.turbofastapply.str.contains()`/
 `.replace()`) are implemented and correct but **not** faster in practice
 — benchmarked from 500 to 1,000,000 rows, consistently ~0.6–0.8x plain
 pandas — so they're excluded from the default `engine="auto"` and only
@@ -39,7 +39,7 @@ installed and the MSVC Visual C++ Redistributable is missing), use the
 fallback build script instead. It calls `cargo build` directly, drops the
 resulting DLL into the package as a `.pyd`, and links `python/` into the
 venv via a `.pth` file (same end result as `maturin develop`, so
-`import turboply` works from anywhere without setting `PYTHONPATH`):
+`import turbofastapply` works from anywhere without setting `PYTHONPATH`):
 
 ```powershell
 ./build.ps1
@@ -51,29 +51,29 @@ properly provisioned toolchain, so `maturin develop` works there regardless.
 
 ## Usage
 
-The accessor is directly callable — `s.turboply(func)` is the primary API,
-not `s.turboply.apply(func)` (kept only as an alias):
+The accessor is directly callable — `s.turbofastapply(func)` is the primary API,
+not `s.turbofastapply.apply(func)` (kept only as an alias):
 
 ```python
 import pandas as pd
-import turboply  # registers the .turboply accessor
+import turbofastapply  # registers the .turbofastapply accessor
 
 s = pd.Series([1, 2, 3])
-s.turboply(lambda x: x * 2)   # identical result to s.apply(lambda x: x * 2)
+s.turbofastapply(lambda x: x * 2)   # identical result to s.apply(lambda x: x * 2)
 
 df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
-df.turboply(lambda row: row["a"] + row["b"], axis=1)
+df.turbofastapply(lambda row: row["a"] + row["b"], axis=1)
 
-# Whitelisted string methods and regex ops (.turboply.str mirrors
+# Whitelisted string methods and regex ops (.turbofastapply.str mirrors
 # pandas' own .str accessor) are implemented and correct, but not
 # faster than plain pandas in practice — see the Status note above.
 # They use plain pandas by default; engine="native" forces the compiled
 # path if you want it anyway:
 names = pd.Series(["  Ada  ", "GRACE", "margaret"] * 50)
-names.turboply(str.upper, engine="native")
-names.turboply.str.contains(r"^GRACE$")
+names.turbofastapply(str.upper, engine="native")
+names.turbofastapply.str.contains(r"^GRACE$")
 
-# .groupby(...).turboply(func) also works — a drop-in for
+# .groupby(...).turbofastapply(func) also works — a drop-in for
 # .groupby(...).apply(func) with the same engine/verbose/progress_bar
 # options as everything else. engine="auto" tries a threaded parallel
 # fallback first (measured, not assumed — same approach as the
@@ -85,28 +85,28 @@ names.turboply.str.contains(r"^GRACE$")
 # no measurement overhead paid. There's no *native* (Rust) GroupBy path
 # though, so engine="native" raises rather than pretending to
 # accelerate something that doesn't exist yet.
-df.groupby("a").turboply(lambda g: g["b"].sum())
+df.groupby("a").turbofastapply(lambda g: g["b"].sum())
 ```
 
 ### Options
 
 ```python
-s.turboply(func, engine="auto")     # default: try the native fast path, fall back silently
-s.turboply(func, engine="pandas")   # always plain pandas .apply(), skips the eligibility check
-s.turboply(func, engine="native")   # require the fast path; raises ValueError with the
+s.turbofastapply(func, engine="auto")     # default: try the native fast path, fall back silently
+s.turbofastapply(func, engine="pandas")   # always plain pandas .apply(), skips the eligibility check
+s.turbofastapply(func, engine="native")   # require the fast path; raises ValueError with the
                                      # specific reason if func isn't eligible, instead of
                                      # silently falling back
 
-s.turboply(func, verbose=True)      # prints which engine was used and why, to stderr
+s.turbofastapply(func, verbose=True)      # prints which engine was used and why, to stderr
 
-s.turboply(func, progress_bar=True) # progress bar for the pandas-fallback path only —
+s.turbofastapply(func, progress_bar=True) # progress bar for the pandas-fallback path only —
                                      # the native path is one vectorized call, nothing to
                                      # report progress on there
 ```
 
 ## Benchmarks
 
-`examples/benchmark.py` compares plain `pandas.apply()` against `.turboply()`
+`examples/benchmark.py` compares plain `pandas.apply()` against `.turbofastapply()`
 on 1,000 rows (median of 50 runs, 5 warmup): the numeric-transform case
 (`x * 2 + 1`) lands at **~1.9–2x** and the row-wise case
 (`row['a'] + row['b']`, notoriously slow in vanilla pandas since it
@@ -122,7 +122,7 @@ the Rust layer itself.
 
 `examples/benchmark_vs_competitor.py` adds a comparison against another
 accelerated-`.apply()` library. It's a separate opt-in script (not a
-`turboply` dependency), since that library pulls in dask, tqdm, etc. As of
+`turbofastapply` dependency), since that library pulls in dask, tqdm, etc. As of
 this writing its 1.4.0 release doesn't run cleanly against recent
 pandas/Python — see that script's error message for the specific
 compatibility gap if you hit it.

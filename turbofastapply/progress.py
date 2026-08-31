@@ -8,7 +8,7 @@ import sys
 _BAR_WIDTH = 30
 
 
-def with_progress(func, total, label="turboply"):
+def with_progress(func, total, label="turbofastapply"):
     if total <= 0:
         return func
 

@@ -26,7 +26,7 @@ from collections import namedtuple
 import numpy as np
 import pandas as pd
 
-from . import _turboply
+from . import _turbofastapply
 
 MIN_ROWS = 50
 SAMPLE_SIZE = 12
@@ -124,10 +124,10 @@ def decide(series, func, *, enforce_min_rows=True):
     if func is abs:
         if is_int_series:
             arr = series.to_numpy().astype(np.int64, copy=False)
-            out = _turboply.abs_i64(arr)
+            out = _turbofastapply.abs_i64(arr)
             engine = "native-int64"
         else:
-            out = _turboply.abs_f64(series.to_numpy(dtype=float))
+            out = _turbofastapply.abs_f64(series.to_numpy(dtype=float))
             engine = "native-float64"
         result = pd.Series(out, index=series.index, name=series.name)
         return Decision(result, engine, "abs() built-in, always exact")
@@ -147,11 +147,11 @@ def decide(series, func, *, enforce_min_rows=True):
 
     if is_int_series and _is_whole(a) and _is_whole(b):
         arr = series.to_numpy().astype(np.int64, copy=False)
-        out = _turboply.affine_i64(arr, int(round(a)), int(round(b)))
+        out = _turbofastapply.affine_i64(arr, int(round(a)), int(round(b)))
         result = pd.Series(out, index=series.index, name=series.name)
         return Decision(result, "native-int64", f"affine transform a*x+b, a={a:g}, b={b:g}")
 
-    out = _turboply.affine_f64(series.to_numpy(dtype=float), a, b)
+    out = _turbofastapply.affine_f64(series.to_numpy(dtype=float), a, b)
     result = _restore_dtype(out, series)
     return Decision(result, "native-float64", f"affine transform a*x+b, a={a:g}, b={b:g}")
 

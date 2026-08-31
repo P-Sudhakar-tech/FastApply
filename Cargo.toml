@@ -1,5 +1,5 @@
 [package]
-name = "turboply"
+name = "turbofastapply"
 version = "0.1.0"
 edition = "2021"
 description = "Accelerated drop-in replacement for pandas .apply()"
@@ -20,7 +20,7 @@ exclude = [
 ]
 
 [lib]
-name = "_turboply"
+name = "_turbofastapply"
 # rlib alongside cdylib so `cargo test`/`cargo bench` can link against the
 # pure compute cores in src/core.rs directly, without needing an embedded
 # Python interpreter (the #[pyfunction] wrappers in lib.rs need a live GIL

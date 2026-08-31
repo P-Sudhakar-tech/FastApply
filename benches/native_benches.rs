@@ -10,10 +10,10 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use regex::Regex;
-// [lib].name in Cargo.toml is "_turboply" (the Python extension module
+// [lib].name in Cargo.toml is "_turbofastapply" (the Python extension module
 // name), which is also the crate name benches import under — not the
-// [package] name "turboply".
-use _turboply::core;
+// [package] name "turbofastapply".
+use _turbofastapply::core;
 
 fn bench_affine_f64(c: &mut Criterion) {
     let mut group = c.benchmark_group("affine_f64");

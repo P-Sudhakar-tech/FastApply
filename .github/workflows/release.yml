@@ -8,7 +8,7 @@ name: Release
 # One-time setup required before this can publish anything (see claude.md
 # "Publishing" section): create `testpypi` and `pypi` environments in repo
 # Settings -> Environments, and register this workflow as a trusted
-# publisher on test.pypi.org and pypi.org for the `turboply` project.
+# publisher on test.pypi.org and pypi.org for the `turbofastapply` project.
 
 on:
   push:

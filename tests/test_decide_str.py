@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import turboply  # noqa: F401  (registers the .turboply accessor)
-from turboply import _turboply, decide_str
+import turbofastapply  # noqa: F401  (registers the .turbofastapply accessor)
+from turbofastapply import _turbofastapply, decide_str
 
 LARGE_N = 1000
 
@@ -14,14 +14,14 @@ def _large_str_series(fmt="Item_{}_Mixed"):
     return pd.Series([fmt.format(i) for i in range(LARGE_N)])
 
 
-# --- whitelisted no-arg methods, reachable via .turboply(func) -------------
+# --- whitelisted no-arg methods, reachable via .turbofastapply(func) -------------
 
 
 @pytest.mark.parametrize("func", [str.upper, str.lower, str.strip])
 def test_whitelisted_method_matches_pandas(func):
     s = _large_str_series("  Item_{}_Mixed  ")
     expected = s.apply(func)
-    result = s.turboply(func)
+    result = s.turbofastapply(func)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -30,8 +30,8 @@ def test_whitelisted_method_actually_calls_native(monkeypatch):
     (see accessor.py's docstring — it's measurably never faster); only
     engine="native" (an explicit override) does."""
     s = _large_str_series()
-    with mock.patch.object(_turboply, "str_upper", wraps=_turboply.str_upper) as spy:
-        result = s.turboply(str.upper, engine="native")
+    with mock.patch.object(_turbofastapply, "str_upper", wraps=_turbofastapply.str_upper) as spy:
+        result = s.turbofastapply(str.upper, engine="native")
     assert result.equals(s.apply(str.upper))
     # verified_native() calls native_fn twice by design: once on the
     # sample to verify it agrees with Python, once on the full Series.
@@ -41,7 +41,7 @@ def test_whitelisted_method_actually_calls_native(monkeypatch):
 def test_unwhitelisted_string_method_falls_back():
     s = _large_str_series()
     assert decide_str.decide(s, str.title).result is None
-    pd.testing.assert_series_equal(s.turboply(str.title), s.apply(str.title))
+    pd.testing.assert_series_equal(s.turbofastapply(str.title), s.apply(str.title))
 
 
 def test_lambda_wrapping_whitelisted_method_is_not_matched():
@@ -53,7 +53,7 @@ def test_lambda_wrapping_whitelisted_method_is_not_matched():
     wrapped = lambda x: x.upper()  # noqa: E731
     decision = decide_str.decide(s, wrapped)
     assert decision.result is None
-    pd.testing.assert_series_equal(s.turboply(wrapped), s.apply(wrapped))
+    pd.testing.assert_series_equal(s.turbofastapply(wrapped), s.apply(wrapped))
 
 
 def test_small_string_series_never_engages():
@@ -79,25 +79,25 @@ def test_unicode_matches_pandas():
     s = pd.Series(["café", "MÜNCHEN", "  日本語  ", "İstanbul", "ﬃ ligature"] * 200)
     for func in (str.upper, str.lower, str.strip):
         expected = s.apply(func)
-        result = s.turboply(func)
+        result = s.turbofastapply(func)
         pd.testing.assert_series_equal(result, expected)
 
 
 def test_engine_native_succeeds_for_whitelisted_string_method():
     s = _large_str_series()
-    result = s.turboply(str.upper, engine="native")
+    result = s.turbofastapply(str.upper, engine="native")
     pd.testing.assert_series_equal(result, s.apply(str.upper))
 
 
 def test_engine_native_raises_for_non_whitelisted_string_method():
     s = _large_str_series()
     with pytest.raises(ValueError, match="not eligible"):
-        s.turboply(str.title, engine="native")
+        s.turbofastapply(str.title, engine="native")
 
 
 def test_verbose_reports_native_string_engine(capsys):
     s = _large_str_series()
-    s.turboply(str.upper, engine="native", verbose=True)
+    s.turbofastapply(str.upper, engine="native", verbose=True)
     err = capsys.readouterr().err
     assert "engine=native-str-upper" in err
 
@@ -106,40 +106,40 @@ def test_auto_engine_never_uses_string_native_path(capsys):
     """The core Phase 4 finding: engine="auto" must never pick the string
     native path, since it's measurably never faster than plain pandas."""
     s = _large_str_series()
-    result = s.turboply(str.upper, verbose=True)
+    result = s.turbofastapply(str.upper, verbose=True)
     pd.testing.assert_series_equal(result, s.apply(str.upper))
     err = capsys.readouterr().err
     assert "native-str" not in err
 
 
-# --- .turboply.str.contains / .replace --------------------------------------
+# --- .turbofastapply.str.contains / .replace --------------------------------------
 
 
 def test_str_contains_matches_pandas():
     s = _large_str_series()
     expected = s.str.contains("Item_1", regex=True)
-    result = s.turboply.str.contains("Item_1")
+    result = s.turbofastapply.str.contains("Item_1")
     pd.testing.assert_series_equal(result, expected)
 
 
 def test_str_contains_regex_matches_pandas():
     s = _large_str_series()
     expected = s.str.contains(r"Item_\d*1_", regex=True)
-    result = s.turboply.str.contains(r"Item_\d*1_")
+    result = s.turbofastapply.str.contains(r"Item_\d*1_")
     pd.testing.assert_series_equal(result, expected)
 
 
 def test_str_replace_matches_pandas():
     s = _large_str_series()
     expected = s.str.replace("Item", "Entry", regex=True)
-    result = s.turboply.str.replace("Item", "Entry")
+    result = s.turbofastapply.str.replace("Item", "Entry")
     pd.testing.assert_series_equal(result, expected)
 
 
 def test_str_replace_regex_matches_pandas():
     s = _large_str_series()
     expected = s.str.replace(r"\d+", "#", regex=True)
-    result = s.turboply.str.replace(r"\d+", "#")
+    result = s.turbofastapply.str.replace(r"\d+", "#")
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -150,27 +150,27 @@ def test_str_contains_invalid_regex_falls_back_to_pandas():
     s = _large_str_series()
     pattern = r"(Item)_\d+_\1"  # backreference: unsupported by Rust regex
     expected = s.str.contains(pattern, regex=True)
-    result = s.turboply.str.contains(pattern)
+    result = s.turbofastapply.str.contains(pattern)
     pd.testing.assert_series_equal(result, expected)
 
 
 def test_str_contains_actually_calls_native_when_eligible():
     s = _large_str_series()
-    with mock.patch.object(_turboply, "str_contains", wraps=_turboply.str_contains) as spy:
-        result = s.turboply.str.contains("Item")
+    with mock.patch.object(_turbofastapply, "str_contains", wraps=_turbofastapply.str_contains) as spy:
+        result = s.turbofastapply.str.contains("Item")
     assert result.equals(s.str.contains("Item", regex=True))
     assert spy.call_count == 2  # sample-verify, then full run — see above
 
 
 def test_str_contains_verbose(capsys):
     s = _large_str_series()
-    s.turboply.str.contains("Item", verbose=True)
+    s.turbofastapply.str.contains("Item", verbose=True)
     err = capsys.readouterr().err
     assert "engine=native-str-contains" in err
 
 
 def test_str_replace_verbose(capsys):
     s = _large_str_series()
-    s.turboply.str.replace("Item", "X", verbose=True)
+    s.turbofastapply.str.replace("Item", "X", verbose=True)
     err = capsys.readouterr().err
     assert "engine=native-str-replace" in err

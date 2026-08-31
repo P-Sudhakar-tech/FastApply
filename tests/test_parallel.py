@@ -4,8 +4,8 @@ import time
 import pandas as pd
 import pytest
 
-import turboply  # noqa: F401  (registers the .turboply accessor)
-from turboply import parallel
+import turbofastapply  # noqa: F401  (registers the .turbofastapply accessor)
+from turbofastapply import parallel
 
 N_ROWS = parallel.MIN_ROWS + 200
 
@@ -60,7 +60,7 @@ def test_parallel_fallback_matches_pandas_for_gil_releasing_func():
     s = pd.Series(range(N_ROWS))
     func = _gil_releasing_func(set())
     expected = s.apply(lambda x: f"row-{x}")  # same output, no sleep, for comparison
-    result = s.turboply(func)
+    result = s.turbofastapply(func)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -76,7 +76,7 @@ def test_parallel_fallback_matches_pandas_for_dataframe_axis1():
             time.sleep(0.001)
             return f"{row['a']}-{row['b']}"
 
-        result = df.turboply(func, axis=1)
+        result = df.turbofastapply(func, axis=1)
         pd.testing.assert_series_equal(result, expected)
         return len(thread_ids) > 1
 
@@ -89,7 +89,7 @@ def test_cpu_bound_func_still_correct_even_if_not_parallelized():
     decision going one way or the other."""
     s = pd.Series(range(N_ROWS))
     expected = s.apply(_cpu_bound_func)
-    result = s.turboply(_cpu_bound_func)
+    result = s.turbofastapply(_cpu_bound_func)
     pd.testing.assert_series_equal(result, expected)
 
 
@@ -100,7 +100,7 @@ def test_gil_releasing_func_actually_runs_on_multiple_threads():
     def attempt():
         thread_ids = set()
         s = pd.Series(range(N_ROWS))
-        s.turboply(_gil_releasing_func(thread_ids))
+        s.turbofastapply(_gil_releasing_func(thread_ids))
         return len(thread_ids) > 1
 
     _eventually(attempt)
@@ -126,7 +126,7 @@ def test_try_parallel_fallback_returns_none_when_func_raises():
 def test_verbose_reports_threaded_parallel_engine(capsys):
     def attempt():
         s = pd.Series(range(N_ROWS))
-        s.turboply(_gil_releasing_func(set()), verbose=True)
+        s.turbofastapply(_gil_releasing_func(set()), verbose=True)
         return "engine=threaded-parallel" in capsys.readouterr().err
 
     _eventually(attempt)
@@ -142,5 +142,5 @@ def test_engine_pandas_never_engages_parallel_fallback(monkeypatch):
         "try_parallel_fallback",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not be called")),
     )
-    result = s.turboply(_gil_releasing_func(set()), engine="pandas")
+    result = s.turbofastapply(_gil_releasing_func(set()), engine="pandas")
     pd.testing.assert_series_equal(result, s.apply(lambda x: f"row-{x}"))
