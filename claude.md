@@ -121,6 +121,32 @@ since it's purpose-built for maturin/PyO3 projects and handles the
 manylinux container + cross-compilation directly, without a raw
 cibuildwheel config layer on top.
 
+**Real bug found via the actual TestPyPI release, not by inspection**: the
+first `turbofastapply` publish (0.1.0) only produced 3 wheel files total —
+one cp312 for Linux, one cp312 for Windows, one cp314 (universal2) for
+macOS — silently missing every other supported version (3.10, 3.11, 3.13,
+and the two missing per-platform combinations). Root cause: none of the
+`linux`/`windows`/`macos` jobs told `maturin-action` which Python
+version(s) to build for, so it silently picked whatever single Python
+happened to be the runner's current default — different per platform,
+hence the inconsistent single version each. `pip install` on an
+unlisted version (confirmed with Python 3.11) fell back to building from
+the sdist locally instead of using a wheel, which is correctness-safe but
+defeats the entire point of publishing prebuilt wheels. Fixed two
+different ways because the platforms work differently: the `linux` job
+builds inside a manylinux Docker container that already bundles every
+supported CPython under `/opt/python` on `PATH`, so adding
+`--find-interpreter` to maturin's args lets one job discover and build
+all of them; `windows`/`macos` aren't containerized, so they instead got
+a real `strategy: matrix: python-version: [...]` (same 3.10-3.14 list
+`ci.yml` already tests) with `actions/setup-python` selecting one
+version per job, each producing its own wheel. Per-platform artifact
+names got the matrix version appended (`wheels-windows-3.11`, etc.) since
+`actions/upload-artifact` requires unique names across parallel jobs in
+one run; the `publish` job's `merge-multiple: true` download already
+handled arbitrarily-many differently-named artifacts with no changes
+needed there.
+
 ## Status
 
 | Phase | Name                              | Status  |

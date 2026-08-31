@@ -62,11 +62,17 @@ jobs:
       - name: Set package version from tag
         run: |
           sed -i "s/^version = \".*\"/version = \"${{ needs.version.outputs.version }}\"/" Cargo.toml pyproject.toml
-      - name: Build wheels
+      - name: Build wheels for every supported CPython (3.10-3.14)
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release --out dist
+          # manylinux containers bundle every supported CPython under
+          # /opt/python already on PATH -- --find-interpreter discovers
+          # all of them in this one job, no per-version matrix needed.
+          # Without it, maturin only builds for whatever single Python
+          # happened to be default on the runner (this is exactly the
+          # gap that shipped 0.1.0 with only a cp312 Linux wheel).
+          args: --release --out dist --find-interpreter
           manylinux: 2_28
           target: x86_64-unknown-linux-gnu
       - uses: actions/upload-artifact@v4
@@ -77,13 +83,19 @@ jobs:
   windows:
     needs: version
     runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
       - name: Set package version from tag
         shell: bash
         run: |
           sed -i "s/^version = \".*\"/version = \"${{ needs.version.outputs.version }}\"/" Cargo.toml pyproject.toml
-      - name: Build wheels
+      - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
           command: build
@@ -91,14 +103,20 @@ jobs:
           target: x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows
+          name: wheels-windows-${{ matrix.python-version }}
           path: dist
 
   macos:
     needs: version
     runs-on: macos-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
       - name: Set package version from tag
         run: |
           sed -i '' "s/^version = \".*\"/version = \"${{ needs.version.outputs.version }}\"/" Cargo.toml pyproject.toml
@@ -110,7 +128,7 @@ jobs:
           target: universal2-apple-darwin
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos
+          name: wheels-macos-${{ matrix.python-version }}
           path: dist
 
   publish:
