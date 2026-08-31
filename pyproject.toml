@@ -35,5 +35,4 @@ Repository = "https://github.com/P-Sudhakar-tech/FastApply"
 test = ["pytest>=7.0"]
 
 [tool.maturin]
-python-source = "python"
 module-name = "turboply._turboply"

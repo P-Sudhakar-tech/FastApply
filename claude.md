@@ -45,7 +45,7 @@ note said the precompiled `maturin.exe` couldn't launch here (missing MSVC
 Visual C++ Redistributable); that's no longer reproducible, whatever
 changed (redistributable installed, maturin reinstalled, or similar).
 `./build.ps1` (runs `cargo build --release` directly, copies the DLL into
-`python/turboply/_turboply.pyd`, and writes a `turboply.pth` file into the
+`turboply/_turboply.pyd`, and writes a `turboply.pth` file into the
 venv's site-packages) still works too and remains the fallback if
 `maturin develop` ever fails to launch again — worth trying `maturin
 develop --release` first regardless, since it's the standard path.
