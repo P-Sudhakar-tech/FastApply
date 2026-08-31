@@ -3,6 +3,21 @@ name = "turboply"
 version = "0.1.0"
 edition = "2021"
 description = "Accelerated drop-in replacement for pandas .apply()"
+license = "MIT"
+repository = "https://github.com/P-Sudhakar-tech/FastApply"
+readme = "README.md"
+# Internal dev docs, tooling, and dev-only sources never ship in the sdist
+# published to PyPI -- only what's needed to install/rebuild the package.
+exclude = [
+    "claude.md",
+    ".github/**",
+    "tests/**",
+    "examples/**",
+    "benches/**",
+    "build.ps1",
+    "target.zip",
+    ".gitignore",
+]
 
 [lib]
 name = "_turboply"
