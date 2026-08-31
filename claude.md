@@ -135,17 +135,30 @@ the sdist locally instead of using a wheel, which is correctness-safe but
 defeats the entire point of publishing prebuilt wheels. Fixed two
 different ways because the platforms work differently: the `linux` job
 builds inside a manylinux Docker container that already bundles every
-supported CPython under `/opt/python` on `PATH`, so adding
-`--find-interpreter` to maturin's args lets one job discover and build
-all of them; `windows`/`macos` aren't containerized, so they instead got
-a real `strategy: matrix: python-version: [...]` (same 3.10-3.14 list
-`ci.yml` already tests) with `actions/setup-python` selecting one
-version per job, each producing its own wheel. Per-platform artifact
-names got the matrix version appended (`wheels-windows-3.11`, etc.) since
+supported CPython under `/opt/python` on `PATH`; `windows`/`macos`
+aren't containerized, so they instead got a real
+`strategy: matrix: python-version: [...]` (same 3.10-3.14 list `ci.yml`
+already tests) with `actions/setup-python` selecting one version per
+job, each producing its own wheel. Per-platform artifact names got the
+matrix version appended (`wheels-windows-3.11`, etc.) since
 `actions/upload-artifact` requires unique names across parallel jobs in
 one run; the `publish` job's `merge-multiple: true` download already
 handled arbitrarily-many differently-named artifacts with no changes
 needed there.
+
+For `linux`, `--find-interpreter` was tried first (discover and build
+for every interpreter the container has, in one job) and it worked —
+but re-checking the actual published files on TestPyPI (not just
+trusting the fix) showed it was *too* thorough: it also built and
+published wheels for cp39 (below this project's documented real
+floor), cp315 (not an actual released Python at the time), free-
+threaded 3.14t/3.15t (a different ABI this project has never been
+validated against), and even a PyPy 3.11 wheel — none of which
+`ci.yml`'s test matrix covers, so none of them are actually verified to
+work. Replaced with explicit `-i python3.10` ... `-i python3.14` flags
+(one per supported version, matching `ci.yml`'s exact list) so only
+the tested range ever gets built and published, same principle as the
+`windows`/`macos` matrix.
 
 ## Status
 
