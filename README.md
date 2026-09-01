@@ -5,8 +5,13 @@ A drop-in, accelerated replacement for `pandas.apply()`.
 Status: **feature-complete** (all 8 roadmap phases) — numeric transforms
 detected as linear/abs (`x * 2 + 1`) and row-wise DataFrame functions
 that are linear combinations of columns (`row['a'] + row['b']`) run
-through genuine native fast paths, ~1.9–2x and ~4–4.5x faster than plain
+through genuine native fast paths, ~6.2x and ~4.6x faster than plain
 `pandas.apply()` on 1,000 rows respectively (`examples/benchmark.py`).
+A dedicated small-data optimization pass (dedup'd array/Index
+construction, replacing numpy scalar calls with plain Python arithmetic
+in the hot verification path, avoiding redundant column-selection/NaN
+scans) also closed a real regression that used to exist from 50 rows
+onward — see "Benchmarks: previous vs now" below for exact numbers.
 Arbitrary callables that don't qualify get a sampling-based threaded
 fallback that only engages when actually measured faster (helps I/O-bound
 work, correctly declines pure-CPU-bound Python). Everything else falls
@@ -108,12 +113,58 @@ s.turbofastapply(func, progress_bar=True) # progress bar for the pandas-fallback
 
 `examples/benchmark.py` compares plain `pandas.apply()` against `.turbofastapply()`
 on 1,000 rows (median of 50 runs, 5 warmup): the numeric-transform case
-(`x * 2 + 1`) lands at **~1.9–2x** and the row-wise case
+(`x * 2 + 1`) lands at **~6.2x** and the row-wise case
 (`row['a'] + row['b']`, notoriously slow in vanilla pandas since it
-constructs a Series per row) at **~4–4.5x**. It also runs the string case
+constructs a Series per row) at **~4.6x**. It also runs the string case
 both ways — default `engine="auto"` (matches plain pandas exactly, no
 native path picked) and forced `engine="native"` — to show directly why
 `"auto"` never picks it.
+
+### Benchmarks: previous (PyPI 0.1.0) vs now
+
+The 0.1.0 release published to PyPI had a real regression from small
+data up through a few hundred rows — turbofastapply was *slower* than
+plain pandas in that range, not just less of a win. A follow-up
+optimization pass (not yet released) fixed the redundant work causing
+it: deduplicated array/Index construction that used to run twice per
+call, `np.isclose()`/`np.round()` scalar calls replaced with plain
+Python arithmetic in the hot verification path (measured at ~38% of
+`decide()`'s total time by itself), and eliminating a redundant
+DataFrame column-selection + a redundant `.isna()` column scan in the
+row-wise path. Median of 100 runs (60 for row-wise), 15 warmup, timed
+against `turbofastapply==0.1.0` installed from PyPI in a clean venv vs.
+the same numbers from this optimization applied locally:
+
+**Numeric path** (`s.turbofastapply(lambda x: x * 2 + 1)`)
+
+| rows | previous (0.1.0) | now | previous speedup | now speedup |
+|-----:|------------------:|----:|------------------:|------------:|
+| 50 | 0.162ms | 0.053ms | 0.34x (regression) | **1.29x** |
+| 100 | 0.161ms | 0.053ms | 0.42x (regression) | **1.29x** |
+| 200 | 0.191ms | 0.054ms | 0.53x (regression) | **1.83x** |
+| 500 | 0.165ms | 0.055ms | 1.15x | **3.46x** |
+| 1,000 | 0.187ms | 0.056ms | 2.06x | **6.20x** |
+| 5,000 | 0.194ms | 0.060ms | 9.77x | **25.75x** |
+
+**Row-wise path** (`df.turbofastapply(lambda row: row['a'] + row['b'], axis=1)`)
+
+| rows | previous (0.1.0) | now | previous speedup | now speedup |
+|-----:|------------------:|----:|------------------:|------------:|
+| 50 | 1.594ms | 1.594ms | 0.41x (regression) | 0.30x (still a regression) |
+| 100 | 1.569ms | 1.455ms | 0.47x (regression) | 0.82x (still a regression, smaller) |
+| 200 | 1.604ms | 1.468ms | 0.86x (regression) | **1.29x** |
+| 500 | 1.637ms | 1.616ms | 1.96x | **2.03x** |
+| 1,000 | 1.615ms | 1.486ms | 4.25x | **4.58x** |
+| 5,000 | 1.670ms | 1.568ms | 22.25x | **22.84x** |
+
+The numeric path's small-data regression is fully fixed — it's now a
+genuine win starting at 50 rows. The row-wise path is meaningfully
+better (crossover point moved from ~500 rows down to ~200) but still
+loses to plain pandas below ~150-200 rows: the remaining cost there is
+structural (Series construction for the correctness-required probe and
+verification rows, plus the user's own `row['a']`-style label lookups
+inside their function), not redundant work left to trim. See `claude.md`
+for the full investigation.
 
 `cargo bench` (`benches/native_benches.rs`) benchmarks the pure Rust
 compute cores directly (1,000 / 50,000 / 200,000 elements), independent

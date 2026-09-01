@@ -26,6 +26,8 @@ verified against real rows from the actual DataFrame before being
 trusted on the full data.
 """
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -38,14 +40,24 @@ MAX_COLUMNS = 20
 _TOL = 1e-9
 
 
-def _probe_row(columns, values):
-    return pd.Series(values, index=columns)
+def _probe_row(index, values):
+    # `index` is a pre-built pd.Index, reused across every probe call
+    # (see decide() below) rather than a plain column list rebuilt into
+    # a fresh Index by pd.Series() on every call. Profiling found
+    # Index construction (ensure_index/Index.__new__) was a real,
+    # measurable share of decide_row()'s total cost at small row
+    # counts, where it's a fixed cost paid by every call regardless of
+    # DataFrame size -- probing already uses synthetic placeholder
+    # values disconnected from the real data's dtypes (see the module
+    # docstring), so reusing one Index object here carries no
+    # correctness risk the way touching the verification sample's
+    # per-row construction below would.
+    return pd.Series(values, index=index)
 
 
-def _sample_rows(df):
-    n = len(df)
+def _sample_positions(n):
     step = max(1, n // SAMPLE_SIZE)
-    return df.iloc[::step].iloc[:SAMPLE_SIZE]
+    return list(range(0, n, step))[:SAMPLE_SIZE]
 
 
 def _pandas_row_would_be_int(df, used_columns):
@@ -87,22 +99,31 @@ def decide(df, func, *, enforce_min_rows=True):
 
     columns = list(df.columns)
     n_cols = len(columns)
+    col_index = pd.Index(columns)  # built once, reused for every probe row below
 
     try:
-        baseline = func(_probe_row(columns, [0.0] * n_cols))
+        baseline = func(_probe_row(col_index, [0.0] * n_cols))
     except Exception as exc:
         return Decision(None, "pandas", f"function raised on probe row: {exc!r}")
     if not _is_real_number(baseline):
         return Decision(None, "pandas", "function output at probe row isn't a real number")
 
     coeffs = []
+    # One mutable list, reused across every unit-basis probe (set the
+    # active column to 1.0, probe, reset to 0.0) instead of allocating a
+    # fresh n_cols-length list per column. Safe to reuse: pd.Series()
+    # converts the list to its own array immediately on construction, so
+    # each _probe_row() call's result is independent of later mutations
+    # here.
+    values = [0.0] * n_cols
     for i in range(n_cols):
-        values = [0.0] * n_cols
         values[i] = 1.0
         try:
-            value = func(_probe_row(columns, values))
+            value = func(_probe_row(col_index, values))
         except Exception as exc:
             return Decision(None, "pandas", f"function raised on probe row: {exc!r}")
+        finally:
+            values[i] = 0.0
         if not _is_real_number(value):
             return Decision(None, "pandas", "function output at probe row isn't a real number")
         coeffs.append(value - baseline)
@@ -112,24 +133,53 @@ def decide(df, func, *, enforce_min_rows=True):
 
     if not all(pd.api.types.is_numeric_dtype(df[col].dtype) for col in used_columns):
         return Decision(None, "pandas", "a column the function's output actually depends on isn't numeric")
+
+    # Built once here and reused for the NaN check, the sample
+    # verification's used_values, AND the final native call below --
+    # profiling found df[col].to_numpy() and df[col].isna() were each
+    # being paid for twice (once per purpose) at small row counts, where
+    # that redundant second full-column pass is a fixed cost independent
+    # of how much data there actually is to process.
+    arrays = [df[col].to_numpy(dtype=float) for col in used_columns]
+
     # Same reasoning as decide.py's equivalent check: a NaN in a used
     # column, outside the sampled rows below, would silently get the
     # naive linear-combination treatment even if func has explicit
     # NaN-handling logic that differs — checked across the whole column,
-    # not just the sample, for the same reason.
-    if any(df[col].isna().any() for col in used_columns):
+    # not just the sample, for the same reason. np.isnan() on the raw
+    # array is used instead of df[col].isna() -- measurably cheaper than
+    # pandas' own Series.isna(), and arrays is already in hand above.
+    if any(np.isnan(a).any() for a in arrays):
         return Decision(None, "pandas", "a used column contains NaN — can't safely trust a sample-only guess")
 
-    sample = _sample_rows(df)
-    for _, row in sample.iterrows():
+    positions = _sample_positions(len(df))
+    sample = df.iloc[positions]
+    # Precomputed once, outside the loop: used_values[i] holds the used
+    # columns' values for sample row i, positionally. func(row) below
+    # still gets the exact same real, .iterrows()-produced row Series
+    # either way -- this only changes how *this* code re-reads values
+    # from that row afterward for its own predicted-vs-actual check,
+    # replacing a label lookup (row[col]: index engine hash/search, paid
+    # once per used column per sample row) with a positional numpy read.
+    # Sliced straight out of `arrays` above (fancy indexing) rather than
+    # sample[used_columns].to_numpy(), which pays for DataFrame column
+    # selection machinery on top of the array copy -- profiling found
+    # that combination was, by a wide margin, the single largest cost
+    # in this function at small row counts.
+    used_values = np.column_stack([a[positions] for a in arrays]) if used_columns else None
+    for sample_pos, (_, row) in enumerate(sample.iterrows()):
         try:
             actual = func(row)
         except Exception:
             return Decision(None, "pandas", "function raised on a real sample row")
         if not _is_real_number(actual):
             return Decision(None, "pandas", "function output on a real row isn't a real number")
-        predicted = baseline + sum(c * row[col] for col, c in used)
-        if np.isnan(predicted) or np.isnan(actual):
+        actual = float(actual)
+        if used_columns:
+            predicted = baseline + sum(c * v for (_, c), v in zip(used, used_values[sample_pos]))
+        else:
+            predicted = baseline
+        if math.isnan(predicted) or math.isnan(actual):
             return Decision(None, "pandas", "NaN encountered during verification")
         tol = _TOL * max(1.0, abs(actual))
         if abs(predicted - actual) > tol:
@@ -138,7 +188,8 @@ def decide(df, func, *, enforce_min_rows=True):
             )
 
     if used_columns:
-        arrays = [df[col].to_numpy(dtype=float) for col in used_columns]
+        # `arrays` was already built above for the NaN check and sample
+        # verification -- reused here rather than recomputed.
         used_coeffs = [c for _, c in used]
         try:
             out = _turbofastapply.row_affine_f64(arrays, used_coeffs, baseline)

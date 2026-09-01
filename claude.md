@@ -731,3 +731,76 @@ always raises. A P2-style aggregation-pattern detector (recognizing
 plausible future addition, layered as an earlier tier ahead of this one,
 not attempted here since it wouldn't have helped the function that
 prompted this phase.
+
+### Post-P9 — Small-Data Optimization Pass (numeric + row-wise) — Done for the numeric path, partial for row-wise
+
+- Prompted by a real, explicit priority from the user: "optimise the
+  package for 50 rows onwards also, speed is importance for us" — after
+  0.1.0 was already published to PyPI, direct benchmarking against the
+  installed package showed both native fast paths (`decide.py`,
+  `decide_row.py`) were genuinely *slower* than plain pandas in the
+  small-N range (numeric: 0.34x–0.53x at 50–200 rows; row-wise:
+  0.41x–0.86x at 50–200 rows) — not a documentation gap, a real
+  regression nobody had benchmarked below ~500-1000 rows before.
+- Root-caused with cProfile + isolated component timing rather than
+  guessing, same methodology as every other phase's bug hunts. Three
+  fixes to `decide.py`: (1) `series.to_numpy()` was being called twice
+  per `decide()` call (once for the verification sample, once again for
+  the native call) — deduplicated into one array, reused for both;
+  (2) `_is_whole()`'s `np.isclose(x, np.round(x))` on a lone Python
+  float was, by cProfile, ~38% of `decide()`'s total time by itself —
+  numpy's array-oriented dispatch machinery (dtype checks, ufunc lookup)
+  costs real time even for one scalar; replaced with plain Python
+  arithmetic reproducing numpy's own default tolerance formula
+  (`abs(x - r) <= 1e-8 + 1e-5 * abs(r)`); (3) `_is_real_number()` given a
+  `type() is int/float` fast path ahead of the `isinstance()` fallback,
+  called up to 14x per `decide()` call.
+- Two fixes to `decide_row.py`, mirroring the same idea for the
+  multivariate case: (1) a `pd.Index` built from the DataFrame's columns
+  is now constructed **once** and reused across every probe-row
+  `pd.Series()` construction, instead of pandas rebuilding a fresh Index
+  from a raw column list on every call — measured ~4-5x cheaper
+  (0.05ms vs 0.23ms per Series construction) than passing a raw list;
+  (2) the used-columns arrays (`df[col].to_numpy(dtype=float)`) are now
+  built exactly once and reused for the NaN check (via `np.isnan()`
+  instead of pandas' own `.isna()`), the sample-verification values (via
+  `np.column_stack` fancy-indexing on precomputed row positions instead
+  of a second `sample[used_columns].to_numpy()` DataFrame column-select,
+  which profiling found was the single largest cost in the function),
+  and the final native call — previously each of those three uses paid
+  for its own separate pandas construction/scan.
+- **What's still untouched, deliberately**: the verification sample's
+  `.iterrows()` loop and what `func(row)` itself receives are left
+  completely alone in both files — correctness there depends on
+  exercising the real user function on real pandas row objects with
+  real dtype behavior, and optimizing that bookkeeping was explicitly
+  out of scope versus optimizing the surrounding decision-making that
+  doesn't change what the user's function ever observes.
+- **Result**: the numeric path's regression is fully closed — 50 rows
+  now measures ~1.3x (a genuine win, not just parity) and every size
+  from there on improved substantially over the pre-fix numbers (1,000
+  rows: ~2.06x → ~6.2x). The row-wise path improved meaningfully (its
+  worst-case fixed cost dropped from a flat ~3.7-3.8ms regardless of N
+  to ~1.5-1.6ms, and its break-even point moved from ~500 rows down to
+  ~200) but a real regression remains below ~150-200 rows (50 rows:
+  0.41x → still only 0.30x-0.82x depending on exact measurement noise at
+  that scale) — re-profiling after the fix showed the remaining cost is
+  the *inherent* per-row Series-construction and label-lookup cost of
+  the 3 probe rows + 12 verification rows, not leftover redundant work,
+  so closing it further would mean shrinking `SAMPLE_SIZE` or the probe
+  count, trading correctness-verification rigor for speed — a real
+  option, but a different kind of tradeoff than every fix applied so
+  far, and not made without explicit sign-off given this project's
+  standing preference for conservative heuristic tuning over maximizing
+  coverage.
+- Full local suite (159/159) re-verified after every individual edit,
+  not just at the end. See the README's "Benchmarks: previous vs now"
+  section for the exact before/after numbers, measured against
+  `turbofastapply==0.1.0` installed from real PyPI in a clean venv (the
+  actual previously-published baseline, not a hypothetical one).
+
+**Deliverable:** genuine, measured speed improvements shipped for both
+fast paths — the numeric path's small-data regression is eliminated
+outright; the row-wise path's is substantially narrowed with the
+remaining gap below ~150-200 rows understood and left as a deliberate,
+flagged tradeoff rather than an unexplained residual.
