@@ -97,7 +97,7 @@ def test_engine_auto_still_declines_small_row_wise_dataframe(capsys):
     df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
     result = df.turbofastapply(lambda row: row["a"] + row["b"], axis=1, verbose=True)
     pd.testing.assert_series_equal(result, df.apply(lambda row: row["a"] + row["b"], axis=1))
-    assert "needs >= 50" in capsys.readouterr().err
+    assert "needs >= 100" in capsys.readouterr().err
 
 
 def test_engine_native_raises_with_extra_args():

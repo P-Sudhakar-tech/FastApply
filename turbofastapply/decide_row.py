@@ -24,6 +24,19 @@ the Phase 3 threaded-parallel fallback instead.
 Same safety net as everywhere else: the guessed coefficients are always
 verified against real rows from the actual DataFrame before being
 trusted on the full data.
+
+Both probing and verification hand `func` a `_RowView` (see below)
+instead of a real pandas row Series. Profiling found constructing a real
+per-row Series (dtype inference, block-manager allocation) was this
+module's single largest cost at small row counts -- `_RowView` supports
+exactly the access patterns an affine row function needs (`row['col']`,
+`row.col`) at a fraction of the cost, while still carrying each column's
+real per-row value (verification) or a synthetic placeholder (probing,
+as before). A function that needs more than that (`row.sum()`,
+`row.values`, ...) raises `AttributeError`, which the existing
+try/except around every call already treats as a safe decline -- never
+a silently wrong result, just a function this fast path doesn't
+accelerate.
 """
 
 import math
@@ -34,25 +47,46 @@ import pandas as pd
 from . import _turbofastapply
 from .decide import Decision, _is_real_number
 
-MIN_ROWS = 50
+# This was MIN_ROWS=300 (raised from an original 50) when the dominant
+# fixed cost was real pandas Series construction for the N+1 probe rows
+# and SAMPLE_SIZE verification rows -- see _RowView above, which replaced
+# that construction with a plain dict and cut the crossover point by
+# roughly 3-4x. A dedicated sweep (8 trials/size, 150 reps/30 warmup each)
+# after that change found every trial at n=100 cleared 1x with margin
+# (worst trial 1.33x, median 2.02x), while n=40-60 still straddled parity
+# noisily (worst trial as low as 0.72x at n=40). 100 is set at the first
+# size where EVERY trial in the sweep cleared 1x, not just the median --
+# same margin-above-the-noisy-band principle as MIN_GROUPS=800 in
+# groupby_parallel.py: engine="auto" should never hand back a result
+# slower than plain pandas. Below 100 rows, engine="auto" declines up
+# front and matches plain pandas exactly (reason: "dataframe has N rows,
+# needs >= 100") instead of engaging a native call that's measured to be
+# unreliable there. engine="native" is unaffected -- enforce_min_rows=False
+# still bypasses this for anyone who wants the native path regardless.
+MIN_ROWS = 100
 SAMPLE_SIZE = 12
 MAX_COLUMNS = 20
 _TOL = 1e-9
 
 
-def _probe_row(index, values):
-    # `index` is a pre-built pd.Index, reused across every probe call
-    # (see decide() below) rather than a plain column list rebuilt into
-    # a fresh Index by pd.Series() on every call. Profiling found
-    # Index construction (ensure_index/Index.__new__) was a real,
-    # measurable share of decide_row()'s total cost at small row
-    # counts, where it's a fixed cost paid by every call regardless of
-    # DataFrame size -- probing already uses synthetic placeholder
-    # values disconnected from the real data's dtypes (see the module
-    # docstring), so reusing one Index object here carries no
-    # correctness risk the way touching the verification sample's
-    # per-row construction below would.
-    return pd.Series(values, index=index)
+class _RowView(dict):
+    """Minimal stand-in for a pandas row Series -- see the module
+    docstring. Plain dict.__getitem__ already gives row['col']; __getattr__
+    adds row.col. Anything else a real Series offers (row.sum(), .values,
+    .name, ...) raises AttributeError, caught by the same try/except every
+    caller already wraps probing/verification in."""
+
+    __slots__ = ()
+
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
+
+
+def _probe_row(columns, values):
+    return _RowView(zip(columns, values))
 
 
 def _sample_positions(n):
@@ -99,10 +133,9 @@ def decide(df, func, *, enforce_min_rows=True):
 
     columns = list(df.columns)
     n_cols = len(columns)
-    col_index = pd.Index(columns)  # built once, reused for every probe row below
 
     try:
-        baseline = func(_probe_row(col_index, [0.0] * n_cols))
+        baseline = func(_probe_row(columns, [0.0] * n_cols))
     except Exception as exc:
         return Decision(None, "pandas", f"function raised on probe row: {exc!r}")
     if not _is_real_number(baseline):
@@ -111,15 +144,14 @@ def decide(df, func, *, enforce_min_rows=True):
     coeffs = []
     # One mutable list, reused across every unit-basis probe (set the
     # active column to 1.0, probe, reset to 0.0) instead of allocating a
-    # fresh n_cols-length list per column. Safe to reuse: pd.Series()
-    # converts the list to its own array immediately on construction, so
-    # each _probe_row() call's result is independent of later mutations
-    # here.
+    # fresh n_cols-length list per column. Safe to reuse: _probe_row()
+    # builds its own dict (via zip) immediately, so each call's _RowView
+    # is independent of later mutations here.
     values = [0.0] * n_cols
     for i in range(n_cols):
         values[i] = 1.0
         try:
-            value = func(_probe_row(col_index, values))
+            value = func(_probe_row(columns, values))
         except Exception as exc:
             return Decision(None, "pandas", f"function raised on probe row: {exc!r}")
         finally:
@@ -153,21 +185,19 @@ def decide(df, func, *, enforce_min_rows=True):
         return Decision(None, "pandas", "a used column contains NaN — can't safely trust a sample-only guess")
 
     positions = _sample_positions(len(df))
-    sample = df.iloc[positions]
+    # Real per-column arrays (actual dtype, unlike `arrays` above which is
+    # forced float64 for the native call) for EVERY column, not just the
+    # used ones -- func might read a column it doesn't end up depending
+    # on, and verification needs to tolerate that exactly like a real
+    # df.apply(axis=1) row would. Built once, not per sample row.
+    real_arrays = {col: df[col].to_numpy() for col in columns}
     # Precomputed once, outside the loop: used_values[i] holds the used
-    # columns' values for sample row i, positionally. func(row) below
-    # still gets the exact same real, .iterrows()-produced row Series
-    # either way -- this only changes how *this* code re-reads values
-    # from that row afterward for its own predicted-vs-actual check,
-    # replacing a label lookup (row[col]: index engine hash/search, paid
-    # once per used column per sample row) with a positional numpy read.
-    # Sliced straight out of `arrays` above (fancy indexing) rather than
-    # sample[used_columns].to_numpy(), which pays for DataFrame column
-    # selection machinery on top of the array copy -- profiling found
-    # that combination was, by a wide margin, the single largest cost
-    # in this function at small row counts.
+    # columns' values for sample row i, positionally, for this function's
+    # own predicted-vs-actual check below -- separate from what `func`
+    # itself receives (a _RowView built fresh per row just below).
     used_values = np.column_stack([a[positions] for a in arrays]) if used_columns else None
-    for sample_pos, (_, row) in enumerate(sample.iterrows()):
+    for sample_pos, pos in enumerate(positions):
+        row = _RowView((col, real_arrays[col][pos]) for col in columns)
         try:
             actual = func(row)
         except Exception:
