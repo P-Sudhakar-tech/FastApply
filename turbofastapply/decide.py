@@ -21,6 +21,7 @@ which engine was used, and a human-readable reason. `verbose=True` and
 rather than re-running the (cheap, but not free) probing a second time.
 """
 
+import math
 from collections import namedtuple
 
 import numpy as np
@@ -36,17 +37,40 @@ Decision = namedtuple("Decision", ["result", "engine", "reason"])
 
 
 def _is_real_number(value):
-    return isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool)
+    # Called up to 14x per decide() call (2 probe points + up to 12
+    # verification-sample values), so its own overhead is worth trimming.
+    # type() identity is both faster than isinstance() (no MRO walk) and
+    # already excludes bool correctly on its own: type(True) is bool, not
+    # int, so a plain `type(value) is int` check never needs the separate
+    # `not isinstance(value, bool)` the original always paid for.
+    t = type(value)
+    if t is int or t is float:
+        return True
+    return isinstance(value, (np.integer, np.floating))
 
 
 def _is_whole(x):
-    return bool(np.isclose(x, np.round(x)))
+    # Profiling found this was, by far, the single biggest cost in
+    # decide() -- np.isclose()/np.round() on a lone Python float pays for
+    # numpy's array-oriented dispatch machinery (dtype checks, buffer
+    # protocol, ufunc lookup) for what's fundamentally one scalar
+    # comparison; measured at ~38% of decide()'s total time via
+    # cProfile, dwarfing every other single cost in the function.
+    # Same formula numpy's isclose() uses by default (atol=1e-8,
+    # rtol=1e-5), just without paying for numpy to compute it.
+    r = round(x)
+    return abs(x - r) <= 1e-8 + 1e-5 * abs(r)
 
 
-def _sample(series):
-    n = len(series)
+def _sample_from_array(arr):
+    n = len(arr)
     step = max(1, n // SAMPLE_SIZE)
-    return series.to_numpy()[::step][:SAMPLE_SIZE].astype(float)
+    # arr[::step][:SAMPLE_SIZE] is itself a real ndarray, still numpy dtype
+    # -- .tolist() up front converts the (at most 12) sampled values to
+    # plain Python floats once, so every later per-item comparison
+    # (_matches_on_sample) works with math.isnan/abs instead of paying
+    # numpy's generic scalar-dispatch overhead on each individual value.
+    return arr[::step][:SAMPLE_SIZE].astype(float).tolist()
 
 
 def _matches_on_sample(func, predict, sample):
@@ -57,8 +81,9 @@ def _matches_on_sample(func, predict, sample):
             return False
         if not _is_real_number(actual):
             return False
+        actual = float(actual)
         predicted = predict(x)
-        if np.isnan(predicted) or np.isnan(actual):
+        if math.isnan(predicted) or math.isnan(actual):
             return False
         tol = _TOL * max(1.0, abs(actual))
         if abs(predicted - actual) > tol:
@@ -117,17 +142,26 @@ def decide(series, func, *, enforce_min_rows=True):
     if not is_int_series and series.isna().any():
         return Decision(None, "pandas", "series contains NaN — can't safely trust a sample-only affine guess")
 
-    sample = _sample(series)
+    # Built once and reused for both the verification sample and (on the
+    # common paths below) the native call itself. series.to_numpy() used
+    # to run twice -- once inside a separate _sample() helper, once again
+    # for the native call's own array -- each a full O(n) copy. That
+    # redundant second pass is a fixed cost paid on every call regardless
+    # of row count, so it mattered most exactly where profitability is
+    # already marginal: small series just past MIN_ROWS, benchmarked to
+    # be a real (not just theoretical) contributor to turbofastapply
+    # measuring *slower* than plain pandas in the 50-200 row range.
+    arr = series.to_numpy().astype(np.int64, copy=False) if is_int_series else series.to_numpy(dtype=float)
+    sample = _sample_from_array(arr)
     if len(sample) == 0:
         return Decision(None, "pandas", "empty sample")
 
     if func is abs:
         if is_int_series:
-            arr = series.to_numpy().astype(np.int64, copy=False)
             out = _turbofastapply.abs_i64(arr)
             engine = "native-int64"
         else:
-            out = _turbofastapply.abs_f64(series.to_numpy(dtype=float))
+            out = _turbofastapply.abs_f64(arr)
             engine = "native-float64"
         result = pd.Series(out, index=series.index, name=series.name)
         return Decision(result, engine, "abs() built-in, always exact")
@@ -146,12 +180,15 @@ def decide(series, func, *, enforce_min_rows=True):
         )
 
     if is_int_series and _is_whole(a) and _is_whole(b):
-        arr = series.to_numpy().astype(np.int64, copy=False)
         out = _turbofastapply.affine_i64(arr, int(round(a)), int(round(b)))
         result = pd.Series(out, index=series.index, name=series.name)
         return Decision(result, "native-int64", f"affine transform a*x+b, a={a:g}, b={b:g}")
 
-    out = _turbofastapply.affine_f64(series.to_numpy(dtype=float), a, b)
+    # Only reachable with a non-whole a/b on an int series (the rare
+    # sub-case) or a series that was already float (the common one, where
+    # `arr` above is already the right dtype and this is a no-op cast).
+    float_arr = arr if not is_int_series else series.to_numpy(dtype=float)
+    out = _turbofastapply.affine_f64(float_arr, a, b)
     result = _restore_dtype(out, series)
     return Decision(result, "native-float64", f"affine transform a*x+b, a={a:g}, b={b:g}")
 

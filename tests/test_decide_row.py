@@ -93,6 +93,38 @@ def test_non_affine_row_func_declines_and_falls_back_correctly(func):
     pd.testing.assert_series_equal(result, expected)
 
 
+@pytest.mark.parametrize(
+    "func",
+    [
+        lambda row: row.sum(),  # real-Series-only method: _RowView lacks it
+        lambda row: row.values.sum(),  # real-Series-only attribute
+        lambda row: row.name,  # real-Series-only attribute
+    ],
+)
+def test_row_func_needing_real_series_api_declines_and_falls_back_correctly(func):
+    """_RowView (the dict-based stand-in probing/verification pass to func,
+    replacing a real pandas row Series for speed -- see the module
+    docstring) only supports row['col'] / row.col. Anything needing more
+    of the real Series API must raise AttributeError internally and
+    decline safely, never silently compute the wrong thing."""
+    df = _large_df()
+    assert decide_row.decide(df, func).result is None
+    expected = df.apply(func, axis=1)
+    result = df.turbofastapply(func, axis=1)
+    pd.testing.assert_series_equal(result, expected)
+
+
+def test_row_affine_matches_pandas_with_attribute_style_access():
+    """_RowView supports row.a as well as row['a'] (see the module
+    docstring) -- confirm attribute access produces the same verified,
+    native-accelerated result as bracket access."""
+    df = _large_df()
+    func = lambda row: row.a + row.b  # noqa: E731
+    decision = decide_row.decide(df, func)
+    assert decision.engine == "native-row-affine"
+    pd.testing.assert_series_equal(decision.result, df.apply(func, axis=1))
+
+
 def test_small_dataframe_never_engages():
     df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
     assert decide_row.decide(df, lambda row: row["a"] + row["b"]).result is None

@@ -67,12 +67,16 @@ jobs:
         with:
           command: build
           # manylinux containers bundle every supported CPython under
-          # /opt/python already on PATH -- --find-interpreter discovers
-          # all of them in this one job, no per-version matrix needed.
-          # Without it, maturin only builds for whatever single Python
-          # happened to be default on the runner (this is exactly the
-          # gap that shipped 0.1.0 with only a cp312 Linux wheel).
-          args: --release --out dist --find-interpreter
+          # /opt/python already on PATH, so one job can build for all of
+          # them -- but --find-interpreter (tried first) discovers every
+          # bundled interpreter unconditionally, which turned out to
+          # include versions this project has never tested: 3.9 (below
+          # the documented real floor), 3.15 (not even released),
+          # free-threaded 3.14t/3.15t (a different ABI), and PyPy 3.11.
+          # Explicit -i flags for exactly the tested range (matching
+          # ci.yml's own matrix) instead, so only verified versions ever
+          # get published.
+          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13 -i python3.14
           manylinux: 2_28
           target: x86_64-unknown-linux-gnu
       - uses: actions/upload-artifact@v4
